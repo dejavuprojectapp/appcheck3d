@@ -31,9 +31,15 @@ interface DebugInfo {
 
 export default function Scene({ modelPaths }: SceneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [frameCount, setFrameCount] = useState(0);
+  const [useARCamera, setUseARCamera] = useState(false);
+  const [isVideoReady, setIsVideoReady] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sceneObjectsRef = useRef<Array<{ name: string; object: any; targetPosition: { x: number; y: number; z: number } }>>([]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cameraARRef = useRef<any>(null);
+  const deviceOrientationRef = useRef({ alpha: 0, beta: 0, gamma: 0 });
   const debugInfoRef = useRef<DebugInfo>({
     camera: { x: 0, y: 0, z: 0 },
     cameraRotation: { x: 0, y: 0, z: 0 },
@@ -53,6 +59,11 @@ export default function Scene({ modelPaths }: SceneProps) {
     objects: [],
   });
   const [debugInfo, setDebugInfo] = useState<DebugInfo>(debugInfoRef.current);
+  const [showCameraPrompt, setShowCameraPrompt] = useState(true);
+  const [showDebugOverlay, setShowDebugOverlay] = useState(true);
+  const deviceMotionRef = useRef({ x: 0, y: 0, z: 0 });
+  const initialOrientationRef = useRef({ alpha: 0, beta: 0, gamma: 0 });
+  const isInitialOrientationSet = useRef(false);
 
   // Função para atualizar a posição de um objeto com smooth transition
   const updateObjectPosition = (objectName: string, axis: 'x' | 'y' | 'z', value: number) => {
@@ -62,6 +73,241 @@ export default function Scene({ modelPaths }: SceneProps) {
       console.log(`🎯 Target posição: ${objectName} - ${axis.toUpperCase()}: ${value}`);
     } else {
       console.error(`❌ Objeto não encontrado: ${objectName}`);
+    }
+  };
+
+  // Inicializa webcam/câmera traseira
+  const startARCamera = async () => {
+    try {
+      console.log('📹 Solicitando acesso à câmera...');
+      console.log('🌐 Protocolo:', window.location.protocol);
+      console.log('🔍 Navigator:', {
+        mediaDevices: !!navigator.mediaDevices,
+        getUserMedia: !!(navigator.mediaDevices?.getUserMedia),
+        userAgent: navigator.userAgent,
+      });
+      
+      // Verifica HTTPS (obrigatório para getUserMedia)
+      if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        throw new Error('HTTPS_REQUIRED');
+      }
+      
+      // Verifica se getUserMedia está disponível
+      if (!navigator.mediaDevices) {
+        // Fallback para API antiga (webkit)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const nav = navigator as any;
+        if (nav.getUserMedia || nav.webkitGetUserMedia || nav.mozGetUserMedia || nav.msGetUserMedia) {
+          throw new Error('LEGACY_API');
+        }
+        throw new Error('NO_MEDIA_DEVICES');
+      }
+      
+      if (!navigator.mediaDevices.getUserMedia) {
+        throw new Error('NO_GET_USER_MEDIA');
+      }
+
+      // Solicita permissão explícita
+      const constraints = {
+        video: {
+          facingMode: 'environment', // Tenta câmera traseira primeiro
+          width: { ideal: 1920 },
+          height: { ideal: 1440 },
+        },
+        audio: false,
+      };
+
+      console.log('📱 Solicitando permissão com constraints:', constraints);
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      console.log('✅ Stream obtido:', stream);
+
+      if (!videoRef.current) {
+        console.error('❌ videoRef.current não está disponível');
+        throw new Error('Elemento de vídeo não encontrado');
+      }
+
+      videoRef.current.srcObject = stream;
+      
+      // Adiciona listener para quando o metadata carregar
+      videoRef.current.onloadedmetadata = async () => {
+        console.log('📹 Metadata carregado');
+        try {
+          await videoRef.current?.play();
+          setIsVideoReady(true);
+          console.log('✅ Câmera iniciada com sucesso:', {
+            width: videoRef.current?.videoWidth,
+            height: videoRef.current?.videoHeight,
+            aspect: (videoRef.current?.videoWidth || 1) / (videoRef.current?.videoHeight || 1),
+          });
+        } catch (playError) {
+          console.error('❌ Erro ao reproduzir vídeo:', playError);
+        }
+      };
+
+      videoRef.current.onerror = (error) => {
+        console.error('❌ Erro no elemento de vídeo:', error);
+      };
+
+      // Solicita permissão para DeviceOrientation (iOS 13+)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const permission = await (DeviceOrientationEvent as any).requestPermission();
+          if (permission === 'granted') {
+            window.addEventListener('deviceorientation', handleDeviceOrientation);
+            console.log('✅ Permissão DeviceOrientation concedida');
+          } else {
+            console.warn('⚠️ Permissão DeviceOrientation negada');
+          }
+        } catch (orientationError) {
+          console.warn('⚠️ Erro ao solicitar DeviceOrientation:', orientationError);
+        }
+      } else {
+        window.addEventListener('deviceorientation', handleDeviceOrientation);
+        console.log('✅ DeviceOrientation listener adicionado');
+      }
+
+      // Adiciona listener para DeviceMotion (acelerômetro)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (typeof (DeviceMotionEvent as any).requestPermission === 'function') {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const permission = await (DeviceMotionEvent as any).requestPermission();
+          if (permission === 'granted') {
+            window.addEventListener('devicemotion', handleDeviceMotion);
+            console.log('✅ Permissão DeviceMotion concedida');
+          }
+        } catch (motionError) {
+          console.warn('⚠️ Erro ao solicitar DeviceMotion:', motionError);
+        }
+      } else {
+        window.addEventListener('devicemotion', handleDeviceMotion);
+        console.log('✅ DeviceMotion listener adicionado');
+      }
+
+      setUseARCamera(true);
+      isInitialOrientationSet.current = false; // Reset para capturar nova orientação inicial
+      console.log('✅ AR Camera ativada');
+      
+    } catch (error) {
+      console.error('❌ Erro detalhado ao acessar câmera:', error);
+      
+      let errorMessage = 'Não foi possível acessar a câmera.\n\n';
+      
+      if (error instanceof Error) {
+        // Erros customizados
+        if (error.message === 'HTTPS_REQUIRED') {
+          errorMessage = '🔒 HTTPS Obrigatório\n\n';
+          errorMessage += 'A câmera só funciona em:\n';
+          errorMessage += '• Sites HTTPS (https://...)\n';
+          errorMessage += '• localhost\n\n';
+          errorMessage += `Você está acessando via: ${window.location.protocol}\n\n`;
+          errorMessage += '💡 Para testar no celular:\n';
+          errorMessage += '1. Use um túnel HTTPS (ngrok, cloudflare tunnel)\n';
+          errorMessage += '2. Ou acesse via cabo USB com port forwarding';
+        } else if (error.message === 'NO_MEDIA_DEVICES') {
+          errorMessage = '❌ Navegador Não Suportado\n\n';
+          errorMessage += 'Seu navegador não suporta MediaDevices API.\n\n';
+          errorMessage += '✅ Navegadores suportados:\n';
+          errorMessage += '• Chrome/Edge 53+\n';
+          errorMessage += '• Firefox 36+\n';
+          errorMessage += '• Safari 11+\n\n';
+          errorMessage += `Seu navegador: ${navigator.userAgent}`;
+        } else if (error.message === 'NO_GET_USER_MEDIA') {
+          errorMessage = '❌ getUserMedia Não Disponível\n\n';
+          errorMessage += 'Seu navegador não suporta getUserMedia.\n\n';
+          errorMessage += '💡 Tente atualizar seu navegador para a versão mais recente.';
+        } else if (error.message === 'LEGACY_API') {
+          errorMessage = '⚠️ API Antiga Detectada\n\n';
+          errorMessage += 'Seu navegador usa uma versão antiga da API de câmera.\n\n';
+          errorMessage += '💡 Por favor, atualize seu navegador.';
+        } else if (error.name === 'NotAllowedError') {
+          errorMessage = '🚫 Permissão Negada\n\n';
+          errorMessage += 'Você bloqueou o acesso à câmera.\n\n';
+          errorMessage += '✅ Para permitir:\n';
+          errorMessage += '1. Toque no ícone 🔒 ou ⓘ na barra de endereços\n';
+          errorMessage += '2. Ative "Câmera"\n';
+          errorMessage += '3. Recarregue a página';
+        } else if (error.name === 'NotFoundError') {
+          errorMessage = '❌ Câmera Não Encontrada\n\n';
+          errorMessage += 'Nenhuma câmera foi detectada no seu dispositivo.';
+        } else if (error.name === 'NotReadableError') {
+          errorMessage = '⚠️ Câmera em Uso\n\n';
+          errorMessage += 'A câmera está sendo usada por outro aplicativo.\n\n';
+          errorMessage += '💡 Feche outros apps que possam estar usando a câmera.';
+        } else if (error.name === 'OverconstrainedError') {
+          errorMessage += '❌ Configurações de câmera não suportadas. Tentando novamente com configurações básicas...';
+          
+          // Tenta novamente com configurações mais simples
+          try {
+            const simpleStream = await navigator.mediaDevices.getUserMedia({
+              video: true,
+              audio: false,
+            });
+            
+            if (videoRef.current) {
+              videoRef.current.srcObject = simpleStream;
+              await videoRef.current.play();
+              setIsVideoReady(true);
+              setUseARCamera(true);
+              console.log('✅ Câmera iniciada com configurações básicas');
+              return;
+            }
+          } catch (retryError) {
+            console.error('❌ Falha na segunda tentativa:', retryError);
+          }
+        } else {
+          errorMessage += `Erro: ${error.message}`;
+        }
+      }
+      
+      alert(errorMessage);
+      setShowCameraPrompt(false);
+    }
+  };
+
+  const stopARCamera = () => {
+    if (videoRef.current?.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+      videoRef.current.srcObject = null;
+    }
+    window.removeEventListener('deviceorientation', handleDeviceOrientation);
+    window.removeEventListener('devicemotion', handleDeviceMotion);
+    setUseARCamera(false);
+    setIsVideoReady(false);
+    isInitialOrientationSet.current = false;
+  };
+
+  const handleDeviceOrientation = (event: DeviceOrientationEvent) => {
+    // Salva orientação inicial como referência
+    if (!isInitialOrientationSet.current && useARCamera) {
+      initialOrientationRef.current = {
+        alpha: event.alpha || 0,
+        beta: event.beta || 0,
+        gamma: event.gamma || 0,
+      };
+      isInitialOrientationSet.current = true;
+      console.log('📍 Orientação inicial definida:', initialOrientationRef.current);
+    }
+
+    deviceOrientationRef.current = {
+      alpha: event.alpha || 0,  // yaw (rotação Z)
+      beta: event.beta || 0,    // pitch (rotação X)
+      gamma: event.gamma || 0,  // roll (rotação Y)
+    };
+  };
+
+  const handleDeviceMotion = (event: DeviceMotionEvent) => {
+    if (event.accelerationIncludingGravity && useARCamera) {
+      // Aceleração com gravidade (m/s²)
+      const acc = event.accelerationIncludingGravity;
+      deviceMotionRef.current = {
+        x: acc.x || 0,
+        y: acc.y || 0,
+        z: acc.z || 0,
+      };
     }
   };
 
@@ -150,9 +396,11 @@ export default function Scene({ modelPaths }: SceneProps) {
         const THREE = await import('three');
         const { OrbitControls } = await import('three/examples/jsm/controls/OrbitControls.js');
         const { PLYLoader } = await import('three/examples/jsm/loaders/PLYLoader.js');
+        const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
 
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x000000);
+        // Background transparente quando AR está ativo, preto quando não está
+        scene.background = null; // Sempre transparente para ver o vídeo
 
         const camera = new THREE.PerspectiveCamera(
           75,
@@ -164,10 +412,33 @@ export default function Scene({ modelPaths }: SceneProps) {
         camera.up.set(0, 0, 1); // Define Z como up
         camera.lookAt(0, 0, 0); // Olha para o centro da cena
 
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        // 📱 Câmera 02 - AR Camera (câmera traseira do celular)
+        // Valores realistas baseados em câmeras de smartphone
+        const cameraAR = new THREE.PerspectiveCamera(
+          53, // FOV realista cross-device (iPhone: 50-55°, Android: 55-60°)
+          4 / 3, // Placeholder - será atualizado quando o video carregar
+          0.01, // Near plane crítico para fake AR
+          100   // Far plane - 1 unidade = 1 metro
+        );
+        cameraAR.position.set(0, 0, 0); // Câmera na origem
+        cameraAR.rotation.order = 'YXZ'; // Ordem correta para DeviceOrientation
+        cameraARRef.current = cameraAR;
+
+        const renderer = new THREE.WebGLRenderer({ 
+          antialias: true,
+          alpha: true, // CRÍTICO: transparência para ver o vídeo
+        });
         renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setClearColor(0x000000, 0); // CRÍTICO: alpha 0 = transparente
         containerRef.current.appendChild(renderer.domElement);
+        
+        // Garante que o canvas fique sobre o vídeo mas com fundo transparente
+        renderer.domElement.style.position = 'absolute';
+        renderer.domElement.style.top = '0';
+        renderer.domElement.style.left = '0';
+        renderer.domElement.style.zIndex = '10'; // Acima do vídeo (z-index: 1)
+        renderer.domElement.style.pointerEvents = 'auto'; // Permite interação com OrbitControls
 
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         scene.add(ambientLight);
@@ -183,24 +454,58 @@ export default function Scene({ modelPaths }: SceneProps) {
         controls.maxPolarAngle = Math.PI; // Permite rotação completa
 
         const loader = new PLYLoader();
-
-        // Adiciona cubo verde como placeholder para futuro GLB
-        const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
-        const cubeMaterial = new THREE.MeshStandardMaterial({ 
-          color: 0x00ff00,
-          metalness: 0.3,
-          roughness: 0.7
-        });
-        const cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
-        cube.position.set(0, 0, 0); // Nasce na origem
-        cube.name = 'Cubo Verde (Placeholder GLB)';
-        scene.add(cube);
-        console.log('📦 Cubo verde adicionado como placeholder para GLB');
+        const gltfLoader = new GLTFLoader();
 
         // Array para rastrear objetos (usando ref global)
-        sceneObjectsRef.current = [
-          { name: 'Cubo Verde (Placeholder GLB)', object: cube, targetPosition: { x: 0, y: 0, z: 0 } }
-        ];
+        sceneObjectsRef.current = [];
+
+        // Carrega arquivo GLB
+        gltfLoader.load(
+          '/models/obj.glb',
+          (gltf) => {
+            const model = gltf.scene;
+            
+            // Calcula bounding box para auto-escala
+            const box = new THREE.Box3().setFromObject(model);
+            const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+            
+            console.log('📦 GLB Bounding Box:', { size, center });
+            
+            // Centraliza o modelo
+            model.position.set(-center.x, -center.y, -center.z);
+            
+            // Auto-escala para caber em uma caixa de tamanho 2
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const scale = 2 / maxDim;
+            model.scale.set(scale, scale, scale);
+            
+            console.log('📏 Escala aplicada:', scale);
+            
+            // Wrapper para manter posição editável
+            const wrapper = new THREE.Group();
+            wrapper.add(model);
+            wrapper.position.set(0, 0, 0); // Nasce na origem
+            wrapper.name = 'obj.glb';
+            scene.add(wrapper);
+            
+            console.log('✅ Modelo GLB carregado e centralizado: obj.glb');
+            
+            sceneObjectsRef.current.push({
+              name: 'obj.glb',
+              object: wrapper,
+              targetPosition: { x: 0, y: 0, z: 0 }
+            });
+            console.log('📋 SceneObjectsRef atualizado:', sceneObjectsRef.current.map(o => o.name));
+          },
+          (progress) => {
+            const percent = (progress.loaded / progress.total) * 100;
+            console.log(`⏳ Carregando obj.glb: ${percent.toFixed(0)}%`);
+          },
+          (error) => {
+            console.error('❌ Erro ao carregar obj.glb:', error);
+          }
+        );
         console.log('📋 SceneObjectsRef inicializado:', sceneObjectsRef.current.map(o => o.name));
 
         plyFiles.forEach((plyFile, index) => {
@@ -250,17 +555,68 @@ export default function Scene({ modelPaths }: SceneProps) {
         const animate = () => {
           animationId = requestAnimationFrame(animate);
           
-          // Aplica smooth transition (lerp) para todas as posições
-          sceneObjectsRef.current.forEach(({ object, targetPosition }) => {
-            const lerpFactor = 0.1; // Quanto menor, mais suave (0.05 = muito suave, 0.2 = rápido)
-            object.position.x += (targetPosition.x - object.position.x) * lerpFactor;
-            object.position.y += (targetPosition.y - object.position.y) * lerpFactor;
-            object.position.z += (targetPosition.z - object.position.z) * lerpFactor;
-          });
+          // 🎮 Fake 4DOF: Aplica movimento baseado em device orientation + motion
+          if (useARCamera && isInitialOrientationSet.current) {
+            sceneObjectsRef.current.forEach(({ object, targetPosition }) => {
+              // Calcula diferença de orientação desde a posição inicial
+              const deltaAlpha = (deviceOrientationRef.current.alpha - initialOrientationRef.current.alpha) * (Math.PI / 180);
+              const deltaBeta = (deviceOrientationRef.current.beta - initialOrientationRef.current.beta) * (Math.PI / 180);
+              const deltaGamma = (deviceOrientationRef.current.gamma - initialOrientationRef.current.gamma) * (Math.PI / 180);
+              
+              // Rotaciona objetos baseado na orientação do celular (invertido para parecer fixo no espaço)
+              object.rotation.z = -deltaAlpha * 0.5; // yaw
+              object.rotation.x = -deltaBeta * 0.5; // pitch
+              object.rotation.y = -deltaGamma * 0.5; // roll
+              
+              // Posição baseada em acelerômetro (parallax suave)
+              // Acelera movimento quanto mais o celular se inclina
+              const sensitivity = 0.05; // Ajuste para controlar sensibilidade
+              const posX = targetPosition.x + (deltaGamma * sensitivity);
+              const posY = targetPosition.y + (deltaBeta * sensitivity);
+              
+              // Lerp suave para a nova posição
+              const lerpFactor = 0.1;
+              object.position.x += (posX - object.position.x) * lerpFactor;
+              object.position.y += (posY - object.position.y) * lerpFactor;
+              object.position.z += (targetPosition.z - object.position.z) * lerpFactor;
+            });
+          } else {
+            // Modo normal: apenas lerp para targetPosition
+            sceneObjectsRef.current.forEach(({ object, targetPosition }) => {
+              const lerpFactor = 0.1;
+              object.position.x += (targetPosition.x - object.position.x) * lerpFactor;
+              object.position.y += (targetPosition.y - object.position.y) * lerpFactor;
+              object.position.z += (targetPosition.z - object.position.z) * lerpFactor;
+            });
+          }
+
+          // Seleciona câmera ativa
+          const activeCamera = useARCamera ? cameraAR : camera;
+
+          // Atualiza câmera AR com video aspect e device orientation
+          if (useARCamera && isVideoReady && videoRef.current) {
+            // ✅ REGRA DE OURO: aspect = video.videoWidth / video.videoHeight
+            const videoAspect = videoRef.current.videoWidth / videoRef.current.videoHeight;
+            if (cameraAR.aspect !== videoAspect) {
+              cameraAR.aspect = videoAspect;
+              cameraAR.updateProjectionMatrix();
+              console.log('📐 Camera AR aspect atualizado:', videoAspect);
+            }
+
+            // Sincroniza com DeviceOrientation (fake 3DOF)
+            const { alpha, beta, gamma } = deviceOrientationRef.current;
+            // Converte device orientation para Euler angles
+            cameraAR.rotation.y = THREE.MathUtils.degToRad(alpha); // yaw
+            cameraAR.rotation.x = THREE.MathUtils.degToRad(beta - 90); // pitch (ajuste de 90° para landscape)
+            cameraAR.rotation.z = THREE.MathUtils.degToRad(gamma); // roll
+          }
           
-          // Atualiza a cada frame (sem throttle para garantir tempo real)
-          controls.update();
-          renderer.render(scene, camera);
+          // Atualiza controles apenas para câmera principal
+          if (!useARCamera) {
+            controls.update();
+          }
+          
+          renderer.render(scene, activeCamera);
           
           // Atualiza debug info constantemente
           const direction = new THREE.Vector3();
@@ -373,6 +729,7 @@ export default function Scene({ modelPaths }: SceneProps) {
 
     return () => {
       cleanupFunctions.forEach(fn => fn());
+      stopARCamera(); // Cleanup camera stream
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelPaths]);
@@ -381,21 +738,125 @@ export default function Scene({ modelPaths }: SceneProps) {
     <div 
       ref={containerRef} 
       className="w-full h-full" 
-      style={{ position: 'relative', background: '#000' }} 
+      style={{ position: 'relative', background: useARCamera ? 'transparent' : '#000', overflow: 'hidden' }} 
     >
-      {/* Debug Info Overlay */}
-      <div className="absolute top-2 right-2 bg-black/70 backdrop-blur-sm text-white p-3 rounded-lg text-xs font-mono z-50 max-w-xs max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="font-bold text-sm text-green-400">📊 Debug Info</h3>
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
-            <span className="text-[9px] text-gray-400">Frame: {frameCount}</span>
+      {/* Video Background para AR Camera - DEVE ficar atrás do canvas */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className="absolute inset-0 w-full h-full"
+        style={{ 
+          objectFit: 'cover',
+          display: useARCamera && isVideoReady ? 'block' : 'none',
+          zIndex: 1,
+        }}
+      />
+
+      {/* Modal de Solicitação de Câmera */}
+      {showCameraPrompt && !useARCamera && (
+        <div className="absolute inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-gradient-to-br from-blue-600 to-purple-700 rounded-2xl p-6 max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="text-center">
+              <div className="text-6xl mb-4">📱</div>
+              <h2 className="text-2xl font-bold text-white mb-3">Experiência AR</h2>
+              <p className="text-white/90 mb-4 text-sm">
+                Permita o acesso à câmera para visualizar os modelos 3D em realidade aumentada no seu ambiente.
+              </p>
+              
+              {/* Aviso de protocolo */}
+              {window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' && (
+                <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 mb-4">
+                  <p className="text-red-200 text-xs font-bold mb-1">🔒 HTTPS Obrigatório</p>
+                  <p className="text-red-200/80 text-xs">
+                    A câmera só funciona em sites HTTPS. Você está acessando via {window.location.protocol}
+                  </p>
+                </div>
+              )}
+              
+              <div className="bg-yellow-500/20 border border-yellow-500/50 rounded-lg p-3 mb-4">
+                <p className="text-yellow-200 text-xs">
+                  ⚠️ Ao clicar, seu navegador pedirá permissão para acessar a câmera. Clique em &quot;Permitir&quot;.
+                </p>
+              </div>
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={async () => {
+                    setShowCameraPrompt(false);
+                    await startARCamera();
+                  }}
+                  className="bg-white text-blue-600 px-6 py-3 rounded-xl font-bold text-lg hover:bg-blue-50 transition-colors shadow-lg"
+                >
+                  ✅ Ativar Câmera AR
+                </button>
+                <button
+                  onClick={() => setShowCameraPrompt(false)}
+                  className="bg-white/10 text-white px-6 py-2 rounded-xl font-semibold text-sm hover:bg-white/20 transition-colors"
+                >
+                  Usar Câmera Principal
+                </button>
+              </div>
+              <p className="text-white/60 text-xs mt-4">
+                💡 Funciona melhor em dispositivos móveis com giroscópio
+              </p>
+            </div>
           </div>
         </div>
+      )}
+
+      {/* Botão para alternar câmera */}
+      <div className="absolute top-2 left-2 z-50 flex gap-2 flex-wrap">
+        <button
+          onClick={() => {
+            if (useARCamera) {
+              stopARCamera();
+            } else {
+              startARCamera();
+            }
+          }}
+          className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-sm shadow-lg transition-colors"
+        >
+          {useARCamera ? '📷 Câmera Principal' : '📱 Câmera AR'}
+        </button>
+        
+        {/* Botão para toggle debug overlay */}
+        <button
+          onClick={() => setShowDebugOverlay(!showDebugOverlay)}
+          className="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg font-semibold text-sm shadow-lg transition-colors"
+          title={showDebugOverlay ? 'Esconder Debug' : 'Mostrar Debug'}
+        >
+          {showDebugOverlay ? '🔽 Esconder Logs' : '🔼 Mostrar Logs'}
+        </button>
+        
+        {useARCamera && !isVideoReady && (
+          <div className="bg-yellow-500 text-black px-3 py-2 rounded-lg text-xs font-semibold">
+            ⏳ Iniciando câmera...
+          </div>
+        )}
+        {useARCamera && isVideoReady && (
+          <div className="bg-green-500 text-white px-3 py-2 rounded-lg text-xs font-semibold">
+            ✅ AR Ativa
+          </div>
+        )}
+      </div>
+      
+      {/* Debug Info Overlay - Condicional */}
+      {showDebugOverlay && (
+        <div className="absolute top-2 right-2 bg-black/70 backdrop-blur-sm text-white p-3 rounded-lg text-xs font-mono z-50 max-w-xs max-h-[90vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-bold text-sm text-green-400">📊 Debug Info</h3>
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
+              <span className="text-[9px] text-gray-400">Frame: {frameCount}</span>
+            </div>
+          </div>
         
         {/* Camera Info */}
         <div className="mb-3 border-b border-white/20 pb-2">
-          <p className="font-semibold text-yellow-300 mb-1">📷 Câmera:</p>
+          <p className="font-semibold text-yellow-300 mb-1">
+            📷 Câmera: {useARCamera ? '📱 AR Mode' : '🖥️ Principal'}
+          </p>
           <p className="text-[10px]">Posição:</p>
           <p className="ml-2">X: {debugInfo.camera.x}</p>
           <p className="ml-2">Y: {debugInfo.camera.y}</p>
@@ -404,6 +865,17 @@ export default function Scene({ modelPaths }: SceneProps) {
           <p className="ml-2">X: {debugInfo.cameraRotation.x}°</p>
           <p className="ml-2">Y: {debugInfo.cameraRotation.y}°</p>
           <p className="ml-2">Z: {debugInfo.cameraRotation.z}°</p>
+          {useARCamera && isVideoReady && videoRef.current && (
+            <>
+              <p className="text-[10px] mt-1 text-cyan-300">📱 Video Stream:</p>
+              <p className="ml-2 text-[9px]">Res: {videoRef.current.videoWidth}×{videoRef.current.videoHeight}</p>
+              <p className="ml-2 text-[9px]">Aspect: {(videoRef.current.videoWidth / videoRef.current.videoHeight).toFixed(3)}</p>
+              <p className="text-[10px] mt-1 text-pink-300">🧭 Device Orientation:</p>
+              <p className="ml-2 text-[9px]">α (yaw): {deviceOrientationRef.current.alpha.toFixed(1)}°</p>
+              <p className="ml-2 text-[9px]">β (pitch): {deviceOrientationRef.current.beta.toFixed(1)}°</p>
+              <p className="ml-2 text-[9px]">γ (roll): {deviceOrientationRef.current.gamma.toFixed(1)}°</p>
+            </>
+          )}
           <p className="text-[10px] mt-1">Look At (direção):</p>
           <p className="ml-2">X: {debugInfo.lookAt.x}</p>
           <p className="ml-2">Y: {debugInfo.lookAt.y}</p>
@@ -482,8 +954,20 @@ export default function Scene({ modelPaths }: SceneProps) {
         <div className="mt-2 pt-2 border-t border-white/20 text-[9px] text-gray-400">
           <p>💡 Eixo UP: Z</p>
           <p>🔄 Atualização em tempo real</p>
+          {useARCamera && (
+            <>
+              <p className="text-cyan-300 mt-1">📱 AR Camera Config:</p>
+              <p>FOV: 53° (realista cross-device)</p>
+              <p>Near: 0.01m / Far: 100m</p>
+              <p>Escala: 1 unit = 1 metro</p>
+              <p className="text-pink-300 mt-1">🎮 Fake 4DOF Ativo:</p>
+              <p>Rotação + Posição baseada em giroscópio</p>
+              <p>Mova o celular para ver o efeito!</p>
+            </>
+          )}
         </div>
       </div>
+      )}
     </div>
   );
 }
