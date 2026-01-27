@@ -7,10 +7,10 @@ export async function GET() {
     const modelsDirectory = join(process.cwd(), 'public', 'models');
     const files = await readdir(modelsDirectory);
     
-    // Filter only supported file types (gaussian-splats-3d only supports .ply and .splat)
+    // Filter only supported file types (.ply, .splat, .glb)
     const supportedFiles = files.filter(file => {
       const ext = file.toLowerCase().split('.').pop();
-      return ['ply', 'splat'].includes(ext || '');
+      return ['ply', 'splat', 'glb'].includes(ext || '');
     });
 
     return NextResponse.json({ files: supportedFiles });

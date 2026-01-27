@@ -591,14 +591,20 @@ export default function Scene({ modelPaths }: SceneProps) {
         console.info('   → Ou renomeie para .ply se for um Point Cloud');
       }
 
-      // Handle PLY files (gaussian-splats-3d.Viewer removido para evitar duplicação)
+      // Filtra arquivos por tipo
       const plyFiles = modelPaths.filter(path => {
         const ext = path.split('.').pop()?.toLowerCase();
         return ext === 'ply';
       });
 
-      if (plyFiles.length > 0) {
-        console.log('📦 Carregando arquivos PLY:', plyFiles);
+      const glbFiles = modelPaths.filter(path => {
+        const ext = path.split('.').pop()?.toLowerCase();
+        return ext === 'glb';
+      });
+
+      // Inicializa a cena se houver qualquer arquivo suportado
+      if (plyFiles.length > 0 || glbFiles.length > 0) {
+        console.log('📦 Carregando modelos:', { ply: plyFiles.length, glb: glbFiles.length });
 
         const THREE = await import('three');
         const { OrbitControls } = await import('three/examples/jsm/controls/OrbitControls.js');
@@ -672,45 +678,54 @@ export default function Scene({ modelPaths }: SceneProps) {
         // 🔒 CARREGAMENTO SEQUENCIAL: Aguarda todos os modelos serem carregados antes de iniciar animação
         const loadingPromises: Promise<void>[] = [];
         
-        // Carrega arquivo GLB com Promise
-        const glbPromise = new Promise<void>((resolve, reject) => {
-          gltfLoader.load(
-            '/models/obj.glb',
-            (gltf) => {
-              // Verifica se já existe um objeto com esse nome na cena
-              if (scene.getObjectByName('obj.glb')) {
-                console.warn('⚠️ DUPLICAÇÃO BLOQUEADA: obj.glb já existe na cena!');
+        // Carrega todos os arquivos GLB com Promises
+        console.log('📋 Iniciando carregamento de GLBs. Total de arquivos:', glbFiles.length, glbFiles);
+        
+        glbFiles.forEach((glbFile, index) => {
+          console.log(`🔄 Preparando carregamento GLB ${index}: ${glbFile}`);
+          
+          const glbPromise = new Promise<void>((resolve, reject) => {
+            gltfLoader.load(
+              glbFile,
+              (gltf) => {
+                const fileName = glbFile.split('/').pop() || `GLB ${index}`;
+                
+                // Verifica se já existe um objeto com esse nome na cena
+                if (scene.getObjectByName(fileName)) {
+                  console.warn('⚠️ DUPLICAÇÃO BLOQUEADA:', fileName, 'já existe na cena!');
+                  resolve();
+                  return;
+                }
+                
+                const model = gltf.scene;
+                model.position.set(0, 0, 0); // Nasce na origem
+                model.name = fileName;
+                console.log('➕ Adicionando GLB à cena:', fileName, '| Total objetos na cena antes:', scene.children.length);
+                scene.add(model);
+                console.log('✅ GLB adicionado:', fileName, '| Total objetos na cena depois:', scene.children.length);
+                
+                sceneObjectsRef.current.push({
+                  name: fileName,
+                  object: model,
+                  targetPosition: { x: 0, y: 0, z: 0 },
+                  opacity: 1,
+                  visible: true
+                });
+                
+                // Cleanup: modelo adicionado à cena, referências temporárias podem ser liberadas
+                console.log(`🧹 GLB loader: recursos temporários liberados para ${fileName}`);
                 resolve();
-                return;
+              },
+              undefined,
+              (error) => {
+                console.error(`❌ Erro ao carregar GLB ${glbFile}:`, error);
+                reject(error);
               }
-              
-              const model = gltf.scene;
-              model.position.set(0, 0, 0); // Nasce na origem
-              model.name = 'obj.glb';
-              console.log('➕ Adicionando GLB à cena:', 'obj.glb', '| Total objetos na cena:', scene.children.length);
-              scene.add(model);
-              console.log('✅ GLB adicionado | Total objetos na cena:', scene.children.length);
-              
-              sceneObjectsRef.current.push({
-                name: 'obj.glb',
-                object: model,
-                targetPosition: { x: 0, y: 0, z: 0 },
-                opacity: 1,
-                visible: true
-              });
-              
-              // Cleanup: modelo adicionado à cena, referências temporárias podem ser liberadas
-              console.log('🧹 GLB loader: recursos temporários liberados');
-              resolve();
-            },
-            undefined,
-            (error) => {
-              console.error('❌ Erro ao carregar obj.glb:', error);
-              reject(error);
-            }
-          );
+            );
+          });
+          
+          loadingPromises.push(glbPromise);
         });
-        loadingPromises.push(glbPromise);
 
         console.log('📋 Iniciando carregamento de PLYs. Total de arquivos:', plyFiles.length, plyFiles);
         
@@ -1363,13 +1378,133 @@ export default function Scene({ modelPaths }: SceneProps) {
           <p className="ml-2 text-[9px]">Área Visível: {debugInfo.viewport.visibleArea}</p>
         </div>
 
-        {/* Objects Info */}
+        {/* Objects Info - Separado por tipo */}
         <div>
-          <p className="font-semibold text-blue-300 mb-1">🎯 Objetos na Cena:</p>
+          <p className="font-semibold text-blue-300 mb-2">🎯 Objetos na Cena:</p>
           {debugInfo.objects.length === 0 ? (
             <p className="text-gray-400 text-[10px]">Carregando...</p>
           ) : (
-            debugInfo.objects.map((obj, idx) => (
+            <>
+              {/* GLB Models */}
+              {debugInfo.objects.filter((obj: any) => obj.name.toLowerCase().endsWith('.glb')).length > 0 && (
+                <div className="mb-3">
+                  <p className="font-semibold text-green-300 mb-1 text-[10px]">📦 GLB Models:</p>
+                  {debugInfo.objects.filter((obj: any) => obj.name.toLowerCase().endsWith('.glb')).map((obj, idx) => (
+                    <div key={`${obj.name}-${idx}`} className="mb-3 pl-2 border-l-2 border-green-500/50">
+                      <p className="text-[10px] font-semibold text-green-200">{obj.name}</p>
+                      
+                      {/* Controles de Visibilidade e Opacity */}
+                      <div className="mt-2 mb-2 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <input 
+                            type="checkbox"
+                            defaultChecked={true}
+                            onChange={(e) => toggleObjectVisibility(obj.name, e.target.checked)}
+                            className="w-3 h-3"
+                            id={`visible-${obj.name}`}
+                          />
+                          <label htmlFor={`visible-${obj.name}`} className="text-[9px] text-cyan-300">
+                            👁️ Visível
+                          </label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] text-purple-300 w-16">🎨 Opacity:</span>
+                          <input 
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.1"
+                            defaultValue="1"
+                            onChange={(e) => {
+                              const value = parseFloat(e.target.value);
+                              updateObjectOpacity(obj.name, value);
+                              const display = e.target.nextElementSibling;
+                              if (display) display.textContent = `${Math.round(value * 100)}%`;
+                            }}
+                            className="flex-1 h-1"
+                          />
+                          <span className="text-[9px] text-white/60 w-8">100%</span>
+                        </div>
+                      </div>
+                      
+                      <p className="text-[9px] text-gray-300 mt-1">Posição:</p>
+                      <div className="ml-2 flex items-center gap-1">
+                        <span className="text-[9px] w-6">X:</span>
+                        <input 
+                          key={`${obj.name}-x-${obj.position.x}`}
+                          type="number" 
+                          step="0.1"
+                          defaultValue={obj.position.x}
+                          onChange={(e) => updateObjectPosition(obj.name, 'x', parseFloat(e.target.value) || 0)}
+                          className="w-14 bg-white/10 border border-white/20 rounded px-1 text-[9px] text-white"
+                        />
+                      </div>
+                      <div className="ml-2 flex items-center gap-1">
+                        <span className="text-[9px] w-6">Y:</span>
+                        <input 
+                          key={`${obj.name}-y-${obj.position.y}`}
+                          type="number" 
+                          step="0.1"
+                          defaultValue={obj.position.y}
+                          onChange={(e) => updateObjectPosition(obj.name, 'y', parseFloat(e.target.value) || 0)}
+                          className="w-14 bg-white/10 border border-white/20 rounded px-1 text-[9px] text-white"
+                        />
+                      </div>
+                      <div className="ml-2 flex items-center gap-1">
+                        <span className="text-[9px] w-6">Z:</span>
+                        <input 
+                          key={`${obj.name}-z-${obj.position.z}`}
+                          type="number" 
+                          step="0.1"
+                          defaultValue={obj.position.z}
+                          onChange={(e) => updateObjectPosition(obj.name, 'z', parseFloat(e.target.value) || 0)}
+                          className="w-14 bg-white/10 border border-white/20 rounded px-1 text-[9px] text-white"
+                        />
+                      </div>
+                      <p className="text-[9px] text-gray-300 mt-1">Rotação (graus):</p>
+                      <div className="ml-2 flex items-center gap-1">
+                        <span className="text-[9px] w-6">X:</span>
+                        <input 
+                          type="number" 
+                          step="1"
+                          defaultValue={obj.rotation.x}
+                          onChange={(e) => updateObjectRotation(obj.name, 'x', parseFloat(e.target.value) || 0)}
+                          className="w-14 bg-white/10 border border-white/20 rounded px-1 text-[9px] text-white"
+                        />
+                        <span className="text-[9px] text-white/60">°</span>
+                      </div>
+                      <div className="ml-2 flex items-center gap-1">
+                        <span className="text-[9px] w-6">Y:</span>
+                        <input 
+                          type="number" 
+                          step="1"
+                          defaultValue={obj.rotation.y}
+                          onChange={(e) => updateObjectRotation(obj.name, 'y', parseFloat(e.target.value) || 0)}
+                          className="w-14 bg-white/10 border border-white/20 rounded px-1 text-[9px] text-white"
+                        />
+                        <span className="text-[9px] text-white/60">°</span>
+                      </div>
+                      <div className="ml-2 flex items-center gap-1">
+                        <span className="text-[9px] w-6">Z:</span>
+                        <input 
+                          type="number" 
+                          step="1"
+                          defaultValue={obj.rotation.z}
+                          onChange={(e) => updateObjectRotation(obj.name, 'z', parseFloat(e.target.value) || 0)}
+                          className="w-14 bg-white/10 border border-white/20 rounded px-1 text-[9px] text-white"
+                        />
+                        <span className="text-[9px] text-white/60">°</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              
+              {/* PLY Models */}
+              {debugInfo.objects.filter((obj: any) => obj.name.toLowerCase().endsWith('.ply')).length > 0 && (
+                <div className="mb-3">
+                  <p className="font-semibold text-yellow-300 mb-1 text-[10px]">☁️ PLY Models:</p>
+                  {debugInfo.objects.filter((obj: any) => obj.name.toLowerCase().endsWith('.ply')).map((obj, idx) => (
               <div key={`${obj.name}-${idx}`} className="mb-3 pl-2 border-l-2 border-blue-500/30">
                 <p className="text-[10px] font-semibold text-white/90">{obj.name}</p>
                 
@@ -1442,42 +1577,45 @@ export default function Scene({ modelPaths }: SceneProps) {
                     className="w-14 bg-white/10 border border-white/20 rounded px-1 text-[9px] text-white"
                   />
                 </div>
-                <p className="text-[9px] text-gray-300 mt-1">Rotação (graus):</p>
-                <div className="ml-2 flex items-center gap-1">
-                  <span className="text-[9px] w-6">X:</span>
-                  <input 
-                    type="number" 
-                    step="1"
-                    defaultValue={obj.rotation.x}
-                    onChange={(e) => updateObjectRotation(obj.name, 'x', parseFloat(e.target.value) || 0)}
-                    className="w-14 bg-white/10 border border-white/20 rounded px-1 text-[9px] text-white"
-                  />
-                  <span className="text-[9px] text-white/60">°</span>
+                      <p className="text-[9px] text-gray-300 mt-1">Rotação (graus):</p>
+                      <div className="ml-2 flex items-center gap-1">
+                        <span className="text-[9px] w-6">X:</span>
+                        <input 
+                          type="number" 
+                          step="1"
+                          defaultValue={obj.rotation.x}
+                          onChange={(e) => updateObjectRotation(obj.name, 'x', parseFloat(e.target.value) || 0)}
+                          className="w-14 bg-white/10 border border-white/20 rounded px-1 text-[9px] text-white"
+                        />
+                        <span className="text-[9px] text-white/60">°</span>
+                      </div>
+                      <div className="ml-2 flex items-center gap-1">
+                        <span className="text-[9px] w-6">Y:</span>
+                        <input 
+                          type="number" 
+                          step="1"
+                          defaultValue={obj.rotation.y}
+                          onChange={(e) => updateObjectRotation(obj.name, 'y', parseFloat(e.target.value) || 0)}
+                          className="w-14 bg-white/10 border border-white/20 rounded px-1 text-[9px] text-white"
+                        />
+                        <span className="text-[9px] text-white/60">°</span>
+                      </div>
+                      <div className="ml-2 flex items-center gap-1">
+                        <span className="text-[9px] w-6">Z:</span>
+                        <input 
+                          type="number" 
+                          step="1"
+                          defaultValue={obj.rotation.z}
+                          onChange={(e) => updateObjectRotation(obj.name, 'z', parseFloat(e.target.value) || 0)}
+                          className="w-14 bg-white/10 border border-white/20 rounded px-1 text-[9px] text-white"
+                        />
+                        <span className="text-[9px] text-white/60">°</span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <div className="ml-2 flex items-center gap-1">
-                  <span className="text-[9px] w-6">Y:</span>
-                  <input 
-                    type="number" 
-                    step="1"
-                    defaultValue={obj.rotation.y}
-                    onChange={(e) => updateObjectRotation(obj.name, 'y', parseFloat(e.target.value) || 0)}
-                    className="w-14 bg-white/10 border border-white/20 rounded px-1 text-[9px] text-white"
-                  />
-                  <span className="text-[9px] text-white/60">°</span>
-                </div>
-                <div className="ml-2 flex items-center gap-1">
-                  <span className="text-[9px] w-6">Z:</span>
-                  <input 
-                    type="number" 
-                    step="1"
-                    defaultValue={obj.rotation.z}
-                    onChange={(e) => updateObjectRotation(obj.name, 'z', parseFloat(e.target.value) || 0)}
-                    className="w-14 bg-white/10 border border-white/20 rounded px-1 text-[9px] text-white"
-                  />
-                  <span className="text-[9px] text-white/60">°</span>
-                </div>
-              </div>
-            ))
+              )}
+            </>
           )}
         </div>
 

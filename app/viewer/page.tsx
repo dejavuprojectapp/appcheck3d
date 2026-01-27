@@ -59,7 +59,7 @@ export default function ViewerPage() {
             <div>
               <p className="text-yellow-400 text-sm mb-2">Nenhum modelo encontrado</p>
               <p className="text-xs text-gray-400">
-                Coloque arquivos .ply, .spz ou .splat em public/models/
+                Coloque arquivos .ply, .splat ou .glb em public/models/
               </p>
             </div>
           ) : (
