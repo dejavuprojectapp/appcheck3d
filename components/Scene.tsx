@@ -35,8 +35,9 @@ export default function Scene({ modelPaths }: SceneProps) {
   const [frameCount, setFrameCount] = useState(0);
   const [useARCamera, setUseARCamera] = useState(false);
   const [isVideoReady, setIsVideoReady] = useState(false);
+  const [objectsLoaded, setObjectsLoaded] = useState(false); // Estado de carregamento dos objetos
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sceneObjectsRef = useRef<Array<{ name: string; object: any; targetPosition: { x: number; y: number; z: number } }>>([]);
+  const sceneObjectsRef = useRef<Array<{ name: string; object: any; targetPosition: { x: number; y: number; z: number }; opacity: number; visible: boolean }>>([]);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cameraARRef = useRef<any>(null);
   const deviceOrientationRef = useRef({ alpha: 0, beta: 0, gamma: 0 });
@@ -61,10 +62,12 @@ export default function Scene({ modelPaths }: SceneProps) {
   const [debugInfo, setDebugInfo] = useState<DebugInfo>(debugInfoRef.current);
   const [showCameraPrompt, setShowCameraPrompt] = useState(true);
   const [showDebugOverlay, setShowDebugOverlay] = useState(true);
+  const [sceneEnabled, setSceneEnabled] = useState(true); // Controla se a cena está ativa
   const deviceMotionRef = useRef({ x: 0, y: 0, z: 0 });
   const initialOrientationRef = useRef({ alpha: 0, beta: 0, gamma: 0 });
   const isInitialOrientationSet = useRef(false);
   const sceneInitialized = useRef(false); // Flag para prevenir múltiplas inicializações
+  const cleanupFunctionsRef = useRef<(() => void)[]>([]); // Ref para funções de cleanup
 
   // Função para atualizar a posição de um objeto com smooth transition
   const updateObjectPosition = (objectName: string, axis: 'x' | 'y' | 'z', value: number) => {
@@ -75,6 +78,61 @@ export default function Scene({ modelPaths }: SceneProps) {
     } else {
       console.error(`❌ Objeto não encontrado: ${objectName}`);
     }
+  };
+
+  // Função para atualizar a opacidade de um objeto
+  const updateObjectOpacity = (objectName: string, opacity: number) => {
+    const objData = sceneObjectsRef.current.find(obj => obj.name === objectName);
+    if (objData) {
+      objData.opacity = Math.max(0, Math.min(1, opacity)); // Clamp entre 0 e 1
+      console.log(`🎨 Opacity: ${objectName} = ${objData.opacity}`);
+    } else {
+      console.error(`❌ Objeto não encontrado: ${objectName}`);
+    }
+  };
+
+  // Função para alternar visibilidade de um objeto
+  const toggleObjectVisibility = (objectName: string, visible: boolean) => {
+    const objData = sceneObjectsRef.current.find(obj => obj.name === objectName);
+    if (objData) {
+      objData.visible = visible;
+      console.log(`👁️ Visibilidade: ${objectName} = ${visible}`);
+    } else {
+      console.error(`❌ Objeto não encontrado: ${objectName}`);
+    }
+  };
+
+  // Função para limpar e recarregar a cena
+  const reloadScene = () => {
+    console.log('🔄 Recarregando cena...');
+    
+    // Executa todas as funções de cleanup
+    cleanupFunctionsRef.current.forEach((fn, index) => {
+      try {
+        fn();
+        console.log(`  ✅ Cleanup function ${index + 1} executada`);
+      } catch (error) {
+        console.error(`  ❌ Erro no cleanup function ${index + 1}:`, error);
+      }
+    });
+    
+    // Limpa o array de cleanup functions
+    cleanupFunctionsRef.current = [];
+    
+    // Para câmera AR se estiver ativa
+    if (useARCamera) {
+      stopARCamera();
+    }
+    
+    // Limpa referências
+    sceneObjectsRef.current = [];
+    cameraARRef.current = null;
+    
+    // Reset flags
+    sceneInitialized.current = false;
+    setObjectsLoaded(false);
+    
+    console.log('✅ Cena limpa. Pronta para recarregar.');
   };
 
   // Inicializa webcam/câmera traseira
@@ -312,11 +370,96 @@ export default function Scene({ modelPaths }: SceneProps) {
     }
   };
 
+  // 🗑️ Função para limpar múltiplas cenas e objetos duplicados
+  const deleteMultipleScenesAndDuplicates = () => {
+    console.log('🧹 Iniciando limpeza de múltiplas cenas e duplicados...');
+    
+    if (!containerRef.current) {
+      console.log('⚠️ Container não disponível para limpeza');
+      return;
+    }
+
+    // 1. Remove todos os canvas existentes (múltiplas cenas)
+    const canvasElements = containerRef.current.querySelectorAll('canvas');
+    if (canvasElements.length > 0) {
+      console.log(`🗑️ Encontrados ${canvasElements.length} canvas element(s)`);
+      canvasElements.forEach((canvas, index) => {
+        try {
+          // Tenta forçar perda de contexto WebGL
+          const gl = canvas.getContext('webgl') || canvas.getContext('webgl2');
+          if (gl) {
+            const loseContext = gl.getExtension('WEBGL_lose_context');
+            if (loseContext) {
+              loseContext.loseContext();
+              console.log(`  ✅ Contexto WebGL perdido do canvas ${index}`);
+            }
+          }
+          
+          // Remove do DOM
+          if (canvas.parentNode) {
+            canvas.parentNode.removeChild(canvas);
+            console.log(`  ✅ Canvas ${index} removido do DOM`);
+          }
+        } catch (error) {
+          console.error(`  ❌ Erro ao remover canvas ${index}:`, error);
+        }
+      });
+    }
+
+    // 2. Limpa objetos duplicados no sceneObjectsRef
+    const uniqueObjects = new Map();
+    const duplicates: string[] = [];
+    
+    sceneObjectsRef.current.forEach((item) => {
+      if (uniqueObjects.has(item.name)) {
+        duplicates.push(item.name);
+        // Limpa o objeto duplicado
+        try {
+          if (item.object.geometry) item.object.geometry.dispose();
+          if (item.object.material) {
+            if (Array.isArray(item.object.material)) {
+              item.object.material.forEach((mat: any) => mat.dispose());
+            } else {
+              item.object.material.dispose();
+            }
+          }
+          console.log(`  🗑️ Objeto duplicado limpo: ${item.name}`);
+        } catch (error) {
+          console.error(`  ❌ Erro ao limpar duplicado ${item.name}:`, error);
+        }
+      } else {
+        uniqueObjects.set(item.name, item);
+      }
+    });
+
+    if (duplicates.length > 0) {
+      console.log(`🗑️ Duplicados encontrados e removidos: ${duplicates.join(', ')}`);
+      // Atualiza o ref apenas com objetos únicos
+      sceneObjectsRef.current = Array.from(uniqueObjects.values());
+      console.log(`✅ sceneObjectsRef atualizado. Total de objetos únicos: ${sceneObjectsRef.current.length}`);
+    } else {
+      console.log('✅ Nenhum objeto duplicado encontrado');
+    }
+
+    console.log('✅ Limpeza de múltiplas cenas e duplicados concluída');
+  };
+
+  // useEffect para monitorar mudanças no sceneEnabled
   useEffect(() => {
-    if (!containerRef.current || modelPaths.length === 0) return;
+    if (!sceneEnabled) {
+      console.log('🛑 Cena desabilitada. Executando limpeza...');
+      reloadScene();
+    }
+  }, [sceneEnabled]);
+
+  useEffect(() => {
+    if (!containerRef.current || modelPaths.length === 0 || !sceneEnabled) return;
 
     console.log('🔄 useEffect executado. ModelPaths:', modelPaths);
     console.log('🚦 sceneInitialized.current:', sceneInitialized.current);
+
+    // 🧹 LIMPA múltiplas cenas e duplicados ANTES de verificar inicialização
+    deleteMultipleScenesAndDuplicates();
 
     // Previne múltiplas inicializações simultâneas
     if (sceneInitialized.current) {
@@ -326,17 +469,33 @@ export default function Scene({ modelPaths }: SceneProps) {
     
     sceneInitialized.current = true;
     console.log('✅ Flag sceneInitialized definida como true');
+    
+    // Reset estado de carregamento
+    setObjectsLoaded(false);
 
-    const cleanupFunctions: (() => void)[] = [];
+    // Limpa array anterior de cleanup functions
+    cleanupFunctionsRef.current = [];
 
     const init = async () => {
       if (!containerRef.current) return;
 
+      // 🧹 LIMPEZA PROFUNDA: Remove qualquer resíduo de objetos no container
+      console.log('🧹 Limpeza profunda do container...');
+      
       // Limpa objetos anteriores para evitar duplicação
       sceneObjectsRef.current = [];
-      console.log('🧹 SceneObjectsRef limpo antes de recarregar');
-      console.log('🔍 Estado inicial - useEffect disparado para:', modelPaths);
+      console.log('  ✅ SceneObjectsRef limpo');
+      
+      // Remove qualquer canvas órfão ainda presente
+      const orphanCanvases = containerRef.current.querySelectorAll('canvas');
+      if (orphanCanvases.length > 0) {
+        console.log(`  🗑️ Removendo ${orphanCanvases.length} canvas órfão(s)...`);
+        orphanCanvases.forEach(canvas => {
+          canvas.remove();
+        });
+      }
 
+      console.log('🔍 Estado inicial - useEffect disparado para:', modelPaths);
       console.log('🚀 Iniciando carregamento de modelos:', modelPaths);
 
       // Check for unsupported .spz files first
@@ -430,94 +589,141 @@ export default function Scene({ modelPaths }: SceneProps) {
         // Array para rastrear objetos (usando ref global)
         sceneObjectsRef.current = [];
 
-        // Carrega arquivo GLB
-        gltfLoader.load(
-          '/models/obj.glb',
-          (gltf) => {
-            // Verifica se já existe um objeto com esse nome na cena
-            if (scene.getObjectByName('obj.glb')) {
-              console.warn('⚠️ DUPLICAÇÃO BLOQUEADA: obj.glb já existe na cena!');
-              return;
-            }
-            
-            const model = gltf.scene;
-            model.position.set(0, 0, 0); // Nasce na origem
-            model.name = 'obj.glb';
-            console.log('➕ Adicionando GLB à cena:', 'obj.glb', '| Total objetos na cena:', scene.children.length);
-            scene.add(model);
-            console.log('✅ GLB adicionado | Total objetos na cena:', scene.children.length);
-            
-            sceneObjectsRef.current.push({
-              name: 'obj.glb',
-              object: model,
-              targetPosition: { x: 0, y: 0, z: 0 }
-            });
-          },
-          undefined,
-          (error) => {
-            console.error('❌ Erro ao carregar obj.glb:', error);
-          }
-        );
-
-        console.log('📋 Iniciando forEach para PLYs. Total de arquivos:', plyFiles.length, plyFiles);
-        plyFiles.forEach((plyFile, index) => {
-          console.log(`🔄 forEach iteração ${index}: Carregando`, plyFile);
-          loader.load(
-            plyFile,
-            (geometry) => {
-              geometry.computeVertexNormals();
-
-              const material = new THREE.PointsMaterial({
-                size: 0.015,
-                vertexColors: true,
-                sizeAttenuation: true,
-              });
-
-              const points = new THREE.Points(geometry, material);
-              const fileName = plyFile.split('/').pop() || `PLY ${index}`;
-              
+        // 🔒 CARREGAMENTO SEQUENCIAL: Aguarda todos os modelos serem carregados antes de iniciar animação
+        const loadingPromises: Promise<void>[] = [];
+        
+        // Carrega arquivo GLB com Promise
+        const glbPromise = new Promise<void>((resolve, reject) => {
+          gltfLoader.load(
+            '/models/obj.glb',
+            (gltf) => {
               // Verifica se já existe um objeto com esse nome na cena
-              if (scene.getObjectByName(fileName)) {
-                console.warn('⚠️ DUPLICAÇÃO BLOQUEADA:', fileName, 'já existe na cena!');
+              if (scene.getObjectByName('obj.glb')) {
+                console.warn('⚠️ DUPLICAÇÃO BLOQUEADA: obj.glb já existe na cena!');
+                resolve();
                 return;
               }
               
-              points.name = fileName;
+              const model = gltf.scene;
+              model.position.set(0, 0, 0); // Nasce na origem
+              model.name = 'obj.glb';
+              console.log('➕ Adicionando GLB à cena:', 'obj.glb', '| Total objetos na cena:', scene.children.length);
+              scene.add(model);
+              console.log('✅ GLB adicionado | Total objetos na cena:', scene.children.length);
               
-              geometry.computeBoundingBox();
-              const boundingBox = geometry.boundingBox;
-              if (boundingBox) {
-                const center = new THREE.Vector3();
-                boundingBox.getCenter(center);
-                
-                const size = new THREE.Vector3();
-                boundingBox.getSize(size);
-                const maxDim = Math.max(size.x, size.y, size.z);
-                const scale = 2 / maxDim;
-                
-                points.scale.setScalar(scale);
-                points.position.set(0, 0, 0); // Nasce na origem
-              }
-
-              console.log('➕ Adicionando PLY à cena:', fileName, '| Total objetos na cena antes:', scene.children.length);
-              scene.add(points);
-              console.log('✅ PLY adicionado:', fileName, '| Total objetos na cena depois:', scene.children.length);
-              sceneObjectsRef.current.push({ name: fileName, object: points, targetPosition: { x: 0, y: 0, z: 0 } });
+              sceneObjectsRef.current.push({
+                name: 'obj.glb',
+                object: model,
+                targetPosition: { x: 0, y: 0, z: 0 },
+                opacity: 1,
+                visible: true
+              });
+              
+              // Cleanup: modelo adicionado à cena, referências temporárias podem ser liberadas
+              console.log('🧹 GLB loader: recursos temporários liberados');
+              resolve();
             },
             undefined,
             (error) => {
-              console.error(`❌ Erro ao carregar PLY ${plyFile}:`, error);
+              console.error('❌ Erro ao carregar obj.glb:', error);
+              reject(error);
             }
           );
         });
+        loadingPromises.push(glbPromise);
+
+        console.log('📋 Iniciando carregamento de PLYs. Total de arquivos:', plyFiles.length, plyFiles);
+        
+        // Carrega todos os PLYs com Promises para garantir ordem
+        plyFiles.forEach((plyFile, index) => {
+          console.log(`🔄 Preparando carregamento ${index}: ${plyFile}`);
+          
+          const plyPromise = new Promise<void>((resolve, reject) => {
+            loader.load(
+              plyFile,
+              (geometry) => {
+                geometry.computeVertexNormals();
+
+                const material = new THREE.PointsMaterial({
+                  size: 0.015,
+                  vertexColors: true,
+                  sizeAttenuation: true,
+                });
+
+                const points = new THREE.Points(geometry, material);
+                const fileName = plyFile.split('/').pop() || `PLY ${index}`;
+                
+                // Verifica se já existe um objeto com esse nome na cena
+                if (scene.getObjectByName(fileName)) {
+                  console.warn('⚠️ DUPLICAÇÃO BLOQUEADA:', fileName, 'já existe na cena!');
+                  resolve();
+                  return;
+                }
+                
+                points.name = fileName;
+                
+                geometry.computeBoundingBox();
+                const boundingBox = geometry.boundingBox;
+                if (boundingBox) {
+                  const center = new THREE.Vector3();
+                  boundingBox.getCenter(center);
+                  
+                  const size = new THREE.Vector3();
+                  boundingBox.getSize(size);
+                  const maxDim = Math.max(size.x, size.y, size.z);
+                  const scale = 2 / maxDim;
+                  
+                  points.scale.setScalar(scale);
+                  points.position.set(0, 0, 0); // Nasce na origem
+                }
+
+                console.log('➕ Adicionando PLY à cena:', fileName, '| Total objetos na cena antes:', scene.children.length);
+                scene.add(points);
+                console.log('✅ PLY adicionado:', fileName, '| Total objetos na cena depois:', scene.children.length);
+                sceneObjectsRef.current.push({ name: fileName, object: points, targetPosition: { x: 0, y: 0, z: 0 }, opacity: 1, visible: true });
+                
+                // Cleanup: geometria e material agora pertencem ao objeto Points na cena
+                console.log(`🧹 PLY loader: recursos temporários liberados para ${fileName}`);
+                resolve();
+              },
+              undefined,
+              (error) => {
+                console.error(`❌ Erro ao carregar PLY ${plyFile}:`, error);
+                reject(error);
+              }
+            );
+          });
+          
+          loadingPromises.push(plyPromise);
+        });
+
+        // 🎯 AGUARDA TODOS OS MODELOS SEREM CARREGADOS antes de iniciar a animação
+        Promise.all(loadingPromises)
+          .then(() => {
+            console.log('✅ TODOS OS MODELOS CARREGADOS! Iniciando animação...');
+            console.log('📊 Total de objetos carregados:', sceneObjectsRef.current.length);
+            setObjectsLoaded(true); // Marca objetos como carregados
+            startAnimation();
+          })
+          .catch((error) => {
+            console.error('❌ Erro ao carregar modelos:', error);
+            setObjectsLoaded(false); // Marca como falha no carregamento
+            // Mesmo com erro, tenta iniciar animação com o que foi carregado
+            startAnimation();
+          });
 
         let animationId: number;
+        const startAnimation = () => {
+          console.log('🎬 Iniciando loop de animação...');
+          animate();
+        };
+        
         const animate = () => {
           animationId = requestAnimationFrame(animate);
           
           //  Fake 4DOF: Aplica movimento baseado em device orientation + motion
           if (useARCamera && isInitialOrientationSet.current) {
-            sceneObjectsRef.current.forEach(({ object, targetPosition }) => {
+            sceneObjectsRef.current.forEach(({ object, targetPosition, opacity, visible }) => {
               // Calcula diferença de orientação desde a posição inicial
               const deltaAlpha = (deviceOrientationRef.current.alpha - initialOrientationRef.current.alpha) * (Math.PI / 180);
               const deltaBeta = (deviceOrientationRef.current.beta - initialOrientationRef.current.beta) * (Math.PI / 180);
@@ -539,14 +745,70 @@ export default function Scene({ modelPaths }: SceneProps) {
               object.position.x += (posX - object.position.x) * lerpFactor;
               object.position.y += (posY - object.position.y) * lerpFactor;
               object.position.z += (targetPosition.z - object.position.z) * lerpFactor;
+              
+              // Aplica opacity e visibility
+              object.visible = visible;
+              if (object.material) {
+                if (Array.isArray(object.material)) {
+                  object.material.forEach((mat: any) => {
+                    mat.opacity = opacity;
+                    mat.transparent = opacity < 1;
+                  });
+                } else {
+                  object.material.opacity = opacity;
+                  object.material.transparent = opacity < 1;
+                }
+              }
+              // Para GLB com children
+              object.traverse((child: any) => {
+                if (child.material) {
+                  if (Array.isArray(child.material)) {
+                    child.material.forEach((mat: any) => {
+                      mat.opacity = opacity;
+                      mat.transparent = opacity < 1;
+                    });
+                  } else {
+                    child.material.opacity = opacity;
+                    child.material.transparent = opacity < 1;
+                  }
+                }
+              });
             });
           } else {
             // Modo normal: apenas lerp para targetPosition
-            sceneObjectsRef.current.forEach(({ object, targetPosition }) => {
+            sceneObjectsRef.current.forEach(({ object, targetPosition, opacity, visible }) => {
               const lerpFactor = 0.1;
               object.position.x += (targetPosition.x - object.position.x) * lerpFactor;
               object.position.y += (targetPosition.y - object.position.y) * lerpFactor;
               object.position.z += (targetPosition.z - object.position.z) * lerpFactor;
+              
+              // Aplica opacity e visibility
+              object.visible = visible;
+              if (object.material) {
+                if (Array.isArray(object.material)) {
+                  object.material.forEach((mat: any) => {
+                    mat.opacity = opacity;
+                    mat.transparent = opacity < 1;
+                  });
+                } else {
+                  object.material.opacity = opacity;
+                  object.material.transparent = opacity < 1;
+                }
+              }
+              // Para GLB com children
+              object.traverse((child: any) => {
+                if (child.material) {
+                  if (Array.isArray(child.material)) {
+                    child.material.forEach((mat: any) => {
+                      mat.opacity = opacity;
+                      mat.transparent = opacity < 1;
+                    });
+                  } else {
+                    child.material.opacity = opacity;
+                    child.material.transparent = opacity < 1;
+                  }
+                }
+              });
             });
           }
 
@@ -576,6 +838,10 @@ export default function Scene({ modelPaths }: SceneProps) {
             controls.update();
           }
           
+          // 🧹 Limpa buffers antes de renderizar para evitar cache visual
+          renderer.clear(true, true, true);
+          
+          // Renderiza a cena
           renderer.render(scene, activeCamera);
           
           // Atualiza debug info constantemente
@@ -657,29 +923,125 @@ export default function Scene({ modelPaths }: SceneProps) {
         };
         window.addEventListener('resize', handleResize);
 
-        cleanupFunctions.push(() => {
-          if (animationId) cancelAnimationFrame(animationId);
-          window.removeEventListener('resize', handleResize);
-          controls.dispose();
+        cleanupFunctionsRef.current.push(() => {
+          console.log('🧹 Iniciando cleanup de recursos 3D...');
           
-          // Limpa todos os objetos da cena
-          scene.traverse((object) => {
-            if (object instanceof THREE.Mesh || object instanceof THREE.Points) {
-              object.geometry?.dispose();
+          // 1. Cancela animação primeiro
+          if (animationId) {
+            cancelAnimationFrame(animationId);
+            console.log('  ✅ AnimationFrame cancelado');
+          }
+          
+          // 2. Remove event listeners
+          window.removeEventListener('resize', handleResize);
+          
+          // 3. Dispose controls
+          controls.dispose();
+          console.log('  ✅ Controls dispostos');
+          
+          // 4. Limpa objetos carregados e seus recursos ANTES de limpar a scene
+          console.log('🧹 Limpando objetos 3D carregados...');
+          sceneObjectsRef.current.forEach(({ name, object }) => {
+            // Remove da scene primeiro
+            if (scene && object.parent === scene) {
+              scene.remove(object);
+              console.log(`  🗑️ ${name} removido da scene`);
+            }
+            
+            // Limpa geometria
+            if (object.geometry) {
+              object.geometry.dispose();
+              console.log(`  ✅ Geometria de ${name} disposta`);
+            }
+            
+            // Limpa material(is)
+            if (object.material) {
               if (Array.isArray(object.material)) {
-                object.material.forEach(mat => mat.dispose());
+                object.material.forEach((mat: any) => {
+                  // Limpa texturas
+                  if (mat.map) mat.map.dispose();
+                  mat.dispose();
+                });
               } else {
-                object.material?.dispose();
+                // Limpa texturas
+                if (object.material.map) object.material.map.dispose();
+                object.material.dispose();
+              }
+              console.log(`  ✅ Material de ${name} disposto`);
+            }
+            
+            // Limpa children recursivamente (para GLB)
+            if (object.children && object.children.length > 0) {
+              object.traverse((child: any) => {
+                if (child.geometry) {
+                  child.geometry.dispose();
+                }
+                if (child.material) {
+                  if (Array.isArray(child.material)) {
+                    child.material.forEach((mat: any) => {
+                      if (mat.map) mat.map.dispose();
+                      mat.dispose();
+                    });
+                  } else {
+                    if (child.material.map) child.material.map.dispose();
+                    child.material.dispose();
+                  }
+                }
+              });
+            }
+          });
+          
+          // 5. Limpa TODOS os objetos restantes da cena (cache)
+          console.log('🧹 Limpando cache da scene...');
+          const objectsToRemove: any[] = [];
+          scene.traverse((object) => {
+            if (object !== scene) {
+              objectsToRemove.push(object);
+              // Limpa recursos
+              if (object instanceof THREE.Mesh || object instanceof THREE.Points) {
+                if (object.geometry) {
+                  object.geometry.dispose();
+                }
+                if (object.material) {
+                  if (Array.isArray(object.material)) {
+                    object.material.forEach((mat: any) => {
+                      if (mat.map) mat.map.dispose();
+                      mat.dispose();
+                    });
+                  } else {
+                    if (object.material.map) object.material.map.dispose();
+                    object.material.dispose();
+                  }
+                }
               }
             }
           });
-          scene.clear();
           
+          // Remove todos os objetos da scene
+          objectsToRemove.forEach(obj => {
+            if (obj.parent) {
+              obj.parent.remove(obj);
+            }
+          });
+          
+          // 6. Clear final da scene
+          scene.clear();
+          console.log('  ✅ Scene completamente limpa');
+          
+          // 7. Limpa o frame buffer do renderer
+          renderer.clear(true, true, true); // color, depth, stencil
+          renderer.renderLists.dispose();
+          console.log('  ✅ Frame buffer e render lists limpos');
+          
+          // 8. Remove canvas do DOM
           if (containerRef.current && containerRef.current.contains(renderer.domElement)) {
             containerRef.current.removeChild(renderer.domElement);
+            console.log('  ✅ Canvas removido do DOM');
           }
+          
+          // 9. Dispose renderer
           renderer.dispose();
-          console.log('🗑️ Renderer e objetos da cena descartados');
+          console.log('🗑️ Renderer e todos os objetos descartados');
         });
       }
     };
@@ -688,20 +1050,22 @@ export default function Scene({ modelPaths }: SceneProps) {
 
     return () => {
       console.log('🧹 Iniciando cleanup...');
-      cleanupFunctions.forEach(fn => fn());
+      cleanupFunctionsRef.current.forEach(fn => fn());
+      cleanupFunctionsRef.current = []; // Limpa array de cleanup functions
       stopARCamera(); // Cleanup camera stream
       sceneObjectsRef.current = []; // Limpa referências de objetos
       sceneInitialized.current = false; // Reset flag para permitir nova inicialização
+      setObjectsLoaded(false); // Reset estado de carregamento
       console.log('✅ Cleanup completo: cena e objetos removidos, flag resetada');
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelPaths]);
+  }, [modelPaths, sceneEnabled]);
 
   return (
     <div 
       ref={containerRef} 
       className="w-full h-full" 
-      style={{ position: 'relative', background: useARCamera ? 'transparent' : '#000', overflow: 'hidden' }} 
+      style={{ position: 'relative', background: 'transparent', overflow: 'hidden' }} 
     >
       {/* Video Background para AR Camera - DEVE ficar atrás do canvas */}
       <video
@@ -770,6 +1134,21 @@ export default function Scene({ modelPaths }: SceneProps) {
 
       {/* Botão para alternar câmera */}
       <div className="absolute top-2 left-2 z-50 flex gap-2 flex-wrap">
+        {/* Checkbox para habilitar/desabilitar loop da cena */}
+        <label className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg font-semibold text-sm shadow-lg transition-colors flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={sceneEnabled}
+            onChange={(e) => {
+              const enabled = e.target.checked;
+              console.log(`🔄 Cena ${enabled ? 'habilitada' : 'desabilitada'}`);
+              setSceneEnabled(enabled);
+            }}
+            className="w-4 h-4"
+          />
+          <span>{sceneEnabled ? '✅ Cena Ativa' : '⏸️ Cena Pausada'}</span>
+        </label>
+        
         <button
           onClick={() => {
             if (useARCamera) {
@@ -871,6 +1250,42 @@ export default function Scene({ modelPaths }: SceneProps) {
             debugInfo.objects.map((obj, idx) => (
               <div key={`${obj.name}-${idx}`} className="mb-3 pl-2 border-l-2 border-blue-500/30">
                 <p className="text-[10px] font-semibold text-white/90">{obj.name}</p>
+                
+                {/* Controles de Visibilidade e Opacity */}
+                <div className="mt-2 mb-2 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="checkbox"
+                      defaultChecked={true}
+                      onChange={(e) => toggleObjectVisibility(obj.name, e.target.checked)}
+                      className="w-3 h-3"
+                      id={`visible-${obj.name}`}
+                    />
+                    <label htmlFor={`visible-${obj.name}`} className="text-[9px] text-cyan-300">
+                      👁️ Visível
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[9px] text-purple-300 w-16">🎨 Opacity:</span>
+                    <input 
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                      defaultValue="1"
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value);
+                        updateObjectOpacity(obj.name, value);
+                        // Atualiza o display do valor
+                        const display = e.target.nextElementSibling;
+                        if (display) display.textContent = `${Math.round(value * 100)}%`;
+                      }}
+                      className="flex-1 h-1"
+                    />
+                    <span className="text-[9px] text-white/60 w-8">100%</span>
+                  </div>
+                </div>
+                
                 <p className="text-[9px] text-gray-300 mt-1">Posição:</p>
                 <div className="ml-2 flex items-center gap-1">
                   <span className="text-[9px] w-6">X:</span>
