@@ -134,6 +134,18 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
   const animationDurationRef = useRef(5000); // Duração total da animação em ms
   const [animatingObjects, setAnimatingObjects] = useState<Set<string>>(new Set());
   const objectAnimationFramesRef = useRef<Map<string, number>>(new Map());
+  const [vignetteOffset, setVignetteOffset] = useState(1.1);
+  const [vignetteDarkness, setVignetteDarkness] = useState(1.3);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vignettePassRef = useRef<any>(null);
+
+  // Atualiza vignette uniforms quando os valores mudam
+  useEffect(() => {
+    if (vignettePassRef.current) {
+      vignettePassRef.current.uniforms['offset'].value = vignetteOffset;
+      vignettePassRef.current.uniforms['darkness'].value = vignetteDarkness;
+    }
+  }, [vignetteOffset, vignetteDarkness]);
 
   // Função para atualizar a posição de um objeto com smooth transition
   const updateObjectPosition = (objectName: string, axis: 'x' | 'y' | 'z', value: number) => {
@@ -214,6 +226,48 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
       }
     } else {
       console.error(`❌ Objeto não encontrado: ${objectName}`);
+    }
+  };
+
+  // Função para atualizar o brilho de um GLB
+  const updateGLBBrightness = (objectName: string, brightness: number) => {
+    const objData = sceneObjectsRef.current.find(obj => obj.name === objectName);
+    if (objData) {
+      objData.brightness = brightness;
+      
+      // Aplica o brilho em todos os materiais do modelo
+      objData.object.traverse((child: any) => {
+        if (child.isMesh && child.material) {
+          const materials = Array.isArray(child.material) ? child.material : [child.material];
+          materials.forEach((mat: any) => {
+            // Método 1: Ajustar color brightness (multiplica as cores)
+            if (mat.color) {
+              // Salva cor original se não foi salvo ainda
+              if (!mat.userData.originalColor) {
+                mat.userData.originalColor = mat.color.clone();
+              }
+              // Aplica brightness multiplicando a cor original
+              mat.color.copy(mat.userData.originalColor).multiplyScalar(brightness);
+            }
+            
+            // Método 2: Ajustar emissive (se o material suportar)
+            if (mat.emissive && mat.userData.originalEmissive === undefined) {
+              mat.userData.originalEmissive = mat.emissive.clone();
+            }
+            if (mat.emissive && brightness > 1) {
+              // Aumenta emissive quando brightness > 1
+              mat.emissive.copy(mat.userData.originalEmissive || mat.emissive).multiplyScalar(brightness - 1);
+            } else if (mat.emissive && brightness <= 1) {
+              // Reseta emissive quando brightness <= 1
+              mat.emissive.copy(mat.userData.originalEmissive || mat.emissive);
+            }
+            
+            mat.needsUpdate = true;
+          });
+        }
+      });
+      
+      console.log(`💡 GLB Brightness: ${objectName} = ${brightness.toFixed(2)}`);
     }
   };
 
@@ -921,6 +975,10 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
         const { OrbitControls } = await import('three/examples/jsm/controls/OrbitControls.js');
         const { PLYLoader } = await import('three/examples/jsm/loaders/PLYLoader.js');
         const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+        const { EffectComposer } = await import('three/examples/jsm/postprocessing/EffectComposer.js');
+        const { RenderPass } = await import('three/examples/jsm/postprocessing/RenderPass.js');
+        const { ShaderPass } = await import('three/examples/jsm/postprocessing/ShaderPass.js');
+        const { VignetteShader } = await import('three/examples/jsm/shaders/VignetteShader.js');
 
         const scene = new THREE.Scene();
         // Background transparente quando AR está ativo, preto quando não está
@@ -1019,6 +1077,17 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
         controls.screenSpacePanning = false; // Mantém Z como up durante pan
         controls.maxPolarAngle = Math.PI; // Permite rotação completa
 
+        // 🎨 Post-processing: Vignette (escurece os cantos)
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        
+        const vignettePass = new ShaderPass(VignetteShader);
+        vignettePass.uniforms['offset'].value = vignetteOffset;   // tamanho da vignette
+        vignettePass.uniforms['darkness'].value = vignetteDarkness; // intensidade do escurecimento
+        composer.addPass(vignettePass);
+        vignettePassRef.current = vignettePass; // Armazena ref para controle via UI
+        console.log('🎨 Vignette effect adicionado');
+
         const loader = new PLYLoader();
         const gltfLoader = new GLTFLoader();
 
@@ -1059,7 +1128,8 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
                   object: model,
                   targetPosition: { x: 0, y: 0, z: 0 },
                   opacity: 1,
-                  visible: true
+                  visible: true,
+                  brightness: 1.0 // Brilho inicial
                 });
                 
                 // Cleanup: modelo adicionado à cena, referências temporárias podem ser liberadas
@@ -1252,8 +1322,8 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
           // 🧹 Limpa buffers antes de renderizar para evitar cache visual
           renderer.clear(true, true, true);
           
-          // Renderiza a cena
-          renderer.render(scene, activeCamera);
+          // Renderiza a cena com post-processing (vignette)
+          composer.render();
           
           // Atualiza debug info constantemente
           const direction = new THREE.Vector3();
@@ -1654,6 +1724,41 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
           </button>
         </div>
 
+        {/* Vignette Controls */}
+        <div className="mb-3 border-b border-white/20 pb-2">
+          <p className="font-semibold text-pink-300 mb-2">🎨 Vignette Effect:</p>
+          
+          <div className="mb-2">
+            <label className="text-[10px] text-gray-300 mb-1 block">
+              Offset (Tamanho): {vignetteOffset.toFixed(2)}
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="3"
+              step="0.1"
+              value={vignetteOffset}
+              onChange={(e) => setVignetteOffset(parseFloat(e.target.value))}
+              className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
+            />
+          </div>
+          
+          <div>
+            <label className="text-[10px] text-gray-300 mb-1 block">
+              Darkness (Intensidade): {vignetteDarkness.toFixed(2)}
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="3"
+              step="0.1"
+              value={vignetteDarkness}
+              onChange={(e) => setVignetteDarkness(parseFloat(e.target.value))}
+              className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
+            />
+          </div>
+        </div>
+
         {/* Background Texture Control */}
         {texturePath && (
           <div className="mb-3 border-b border-white/20 pb-2">
@@ -1839,6 +1944,24 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
                             className="flex-1 h-1"
                           />
                           <span className="text-[9px] text-white/60 w-8">100%</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] text-yellow-300 w-16">💡 Brilho:</span>
+                          <input 
+                            type="range"
+                            min="0"
+                            max="3"
+                            step="0.1"
+                            defaultValue="1"
+                            onChange={(e) => {
+                              const value = parseFloat(e.target.value);
+                              updateGLBBrightness(obj.name, value);
+                              const display = e.target.nextElementSibling;
+                              if (display) display.textContent = value.toFixed(1);
+                            }}
+                            className="flex-1 h-1"
+                          />
+                          <span className="text-[9px] text-white/60 w-8">1.0</span>
                         </div>
                       </div>
                       
