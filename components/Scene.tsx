@@ -1,7 +1,4 @@
-
 'use client';
-import * as THREE from 'three';
-import { EffectComposer, RenderPass, ShaderPass } from 'three-stdlib';
 
 import { useEffect, useRef, useState } from 'react';
 
@@ -78,7 +75,6 @@ interface DebugInfo {
   }>;
 }
 
-
 export default function Scene({ modelPaths, texturePath }: SceneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -86,10 +82,14 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
   const [useARCamera, setUseARCamera] = useState(false);
   const [isVideoReady, setIsVideoReady] = useState(false);
   const [bgTextureEnabled, setBgTextureEnabled] = useState(false); // Controla se a textura de fundo está ativa
-  const sceneRef = useRef<THREE.Scene | null>(null); // Ref para a cena Three.js
-  const bgTextureRef = useRef<THREE.Texture | null>(null); // Ref para a textura de fundo carregada
-  const sceneObjectsRef = useRef<Array<{ name: string; object: THREE.Object3D; targetPosition: { x: number; y: number; z: number }; opacity: number; visible: boolean; brightness?: number }>>([]);
-  const cameraARRef = useRef<THREE.PerspectiveCamera | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sceneRef = useRef<any>(null); // Ref para a cena Three.js
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bgTextureRef = useRef<any>(null); // Ref para a textura de fundo carregada
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sceneObjectsRef = useRef<Array<{ name: string; object: any; targetPosition: { x: number; y: number; z: number }; opacity: number; visible: boolean }>>([]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cameraARRef = useRef<any>(null);
   const deviceOrientationRef = useRef({ alpha: 0, beta: 0, gamma: 0 });
   const debugInfoRef = useRef<DebugInfo>({
     camera: { x: 0, y: 0, z: 0 },
@@ -126,7 +126,8 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
     rotation: { x: number; y: number; z: number };
     lookAt: { x: number; y: number; z: number };
   }>>([]);
-  const activeCameraRef = useRef<THREE.Camera | null>(null); // Ref para a câmera ativa
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const activeCameraRef = useRef<any>(null); // Ref para a câmera ativa
   const [isAnimating, setIsAnimating] = useState(false);
   const animationFrameRef = useRef<number | null>(null);
   const animationProgressRef = useRef(0);
@@ -135,54 +136,17 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
   const objectAnimationFramesRef = useRef<Map<string, number>>(new Map());
   const [vignetteOffset, setVignetteOffset] = useState(1.1);
   const [vignetteDarkness, setVignetteDarkness] = useState(1.3);
-  const vignettePassRef = useRef<ShaderPass | null>(null);
-  // Luzes
-  const [ambientIntensity, setAmbientIntensity] = useState(1.5);
-  const [pointIntensity, setPointIntensity] = useState(2);
-  const [directionalIntensity, setDirectionalIntensity] = useState(1.5);
-  const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
-  const pointLightRef = useRef<THREE.PointLight | null>(null);
-  const directionalLightRef = useRef<THREE.DirectionalLight | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vignettePassRef = useRef<any>(null);
   const [envMapIntensity, setEnvMapIntensity] = useState(1.0);
 
-  // --- HOOKS DEVEM FICAR AQUI, NO TOPO DO COMPONENTE ---
+  // Atualiza vignette uniforms quando os valores mudam
   useEffect(() => {
     if (vignettePassRef.current) {
       vignettePassRef.current.uniforms['offset'].value = vignetteOffset;
       vignettePassRef.current.uniforms['darkness'].value = vignetteDarkness;
     }
   }, [vignetteOffset, vignetteDarkness]);
-
-  useEffect(() => {
-    if (ambientLightRef.current) ambientLightRef.current.intensity = ambientIntensity;
-  }, [ambientIntensity]);
-
-  useEffect(() => {
-    if (pointLightRef.current) pointLightRef.current.intensity = pointIntensity;
-  }, [pointIntensity]);
-
-  useEffect(() => {
-    if (directionalLightRef.current) directionalLightRef.current.intensity = directionalIntensity;
-  }, [directionalIntensity]);
-
-  useEffect(() => {
-    sceneObjectsRef.current.forEach(obj => {
-      if (obj.object && obj.object.traverse) {
-        obj.object.traverse((child: THREE.Object3D) => {
-          const mesh = child as THREE.Mesh;
-          if (mesh.isMesh && mesh.material) {
-            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-            materials.forEach((mat) => {
-              if ('envMapIntensity' in mat) {
-                (mat as THREE.MeshPhysicalMaterial).envMapIntensity = envMapIntensity;
-                (mat as THREE.Material).needsUpdate = true;
-              }
-            });
-          }
-        });
-      }
-    });
-  }, [envMapIntensity]);
 
   // Função para atualizar a posição de um objeto com smooth transition
   const updateObjectPosition = (objectName: string, axis: 'x' | 'y' | 'z', value: number) => {
@@ -250,9 +214,9 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
       const fileExt = objectName.toLowerCase().split('.').pop();
       const isPlyOrSplat = fileExt === 'ply' || fileExt === 'splat';
       
-      if (isPlyOrSplat && (objData.object instanceof THREE.Points || objData.object instanceof THREE.Mesh)) {
+      if (isPlyOrSplat) {
         // 💎 PLY/SPLAT: Controla uOpacity uniform no ShaderMaterial
-        const material = (objData.object as THREE.Points | THREE.Mesh).material as THREE.ShaderMaterial;
+        const material = objData.object.material;
         if (material && material.uniforms && material.uniforms.uOpacity) {
           material.uniforms.uOpacity.value = objData.opacity;
           console.log(`🎨 PLY/SPLAT Opacity: ${objectName} = ${objData.opacity} (uniform)`);
@@ -273,32 +237,33 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
       objData.brightness = brightness;
       
       // Aplica o brilho em todos os materiais do modelo
-      objData.object.traverse((child: THREE.Object3D) => {
-        const mesh = child as THREE.Mesh;
-        if (mesh.isMesh && mesh.material) {
-          const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-          materials.forEach((mat) => {
+      objData.object.traverse((child: any) => {
+        if (child.isMesh && child.material) {
+          const materials = Array.isArray(child.material) ? child.material : [child.material];
+          materials.forEach((mat: any) => {
             // Método 1: Ajustar color brightness (multiplica as cores)
-            if ('color' in mat && mat.color && mat.color instanceof THREE.Color) {
-              const userData = mat.userData as Record<string, unknown>;
-              if (!(userData.originalColor instanceof THREE.Color)) {
-                userData.originalColor = mat.color.clone();
+            if (mat.color) {
+              // Salva cor original se não foi salvo ainda
+              if (!mat.userData.originalColor) {
+                mat.userData.originalColor = mat.color.clone();
               }
-              mat.color.copy(userData.originalColor as THREE.Color).multiplyScalar(brightness);
+              // Aplica brightness multiplicando a cor original
+              mat.color.copy(mat.userData.originalColor).multiplyScalar(brightness);
             }
+            
             // Método 2: Ajustar emissive (se o material suportar)
-            if ('emissive' in mat && mat.emissive && mat.emissive instanceof THREE.Color && mat.userData) {
-              const userData = mat.userData as Record<string, unknown>;
-              if (!(userData.originalEmissive instanceof THREE.Color)) {
-                userData.originalEmissive = mat.emissive.clone();
-              }
-              if (brightness > 1) {
-                mat.emissive.copy((userData.originalEmissive as THREE.Color) || mat.emissive).multiplyScalar(brightness - 1);
-              } else {
-                mat.emissive.copy((userData.originalEmissive as THREE.Color) || mat.emissive);
-              }
+            if (mat.emissive && mat.userData.originalEmissive === undefined) {
+              mat.userData.originalEmissive = mat.emissive.clone();
             }
-            (mat as THREE.Material).needsUpdate = true;
+            if (mat.emissive && brightness > 1) {
+              // Aumenta emissive quando brightness > 1
+              mat.emissive.copy(mat.userData.originalEmissive || mat.emissive).multiplyScalar(brightness - 1);
+            } else if (mat.emissive && brightness <= 1) {
+              // Reseta emissive quando brightness <= 1
+              mat.emissive.copy(mat.userData.originalEmissive || mat.emissive);
+            }
+            
+            mat.needsUpdate = true;
           });
         }
       });
@@ -325,8 +290,8 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
       const fileExt = objectName.toLowerCase().split('.').pop();
       const isPlyOrSplat = fileExt === 'ply' || fileExt === 'splat';
       
-      if (isPlyOrSplat && (objData.object instanceof THREE.Points || objData.object instanceof THREE.Mesh)) {
-        const material = (objData.object as THREE.Points | THREE.Mesh).material as THREE.ShaderMaterial;
+      if (isPlyOrSplat) {
+        const material = objData.object.material;
         if (material && material.uniforms && material.uniforms.uBrightness) {
           material.uniforms.uBrightness.value = Math.max(0, brightness); // Clamp mínimo 0
           console.log(`💡 Brilho: ${objectName} = ${brightness.toFixed(2)}x`);
@@ -346,8 +311,8 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
       const fileExt = objectName.toLowerCase().split('.').pop();
       const isPlyOrSplat = fileExt === 'ply' || fileExt === 'splat';
       
-      if (isPlyOrSplat && (objData.object instanceof THREE.Points || objData.object instanceof THREE.Mesh)) {
-        const material = (objData.object as THREE.Points | THREE.Mesh).material as THREE.ShaderMaterial;
+      if (isPlyOrSplat) {
+        const material = objData.object.material;
         if (material && material.uniforms && material.uniforms.uPointSize) {
           material.uniforms.uPointSize.value = Math.max(0.1, pointSize); // Clamp mínimo 0.1
           console.log(`📏 Tamanho de Ponto: ${objectName} = ${pointSize.toFixed(1)}px`);
@@ -384,14 +349,13 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
   useEffect(() => {
     sceneObjectsRef.current.forEach(obj => {
       if (obj.object && obj.object.traverse) {
-        obj.object.traverse((child: THREE.Object3D) => {
-          const mesh = child as THREE.Mesh;
-          if (mesh.isMesh && mesh.material) {
-            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-            materials.forEach((mat) => {
-              if ('envMapIntensity' in mat) {
-                (mat as THREE.MeshPhysicalMaterial).envMapIntensity = envMapIntensity;
-                (mat as THREE.Material).needsUpdate = true;
+        obj.object.traverse((child: any) => {
+          if (child.isMesh && child.material) {
+            const materials = Array.isArray(child.material) ? child.material : [child.material];
+            materials.forEach((mat: any) => {
+              if (mat.envMapIntensity !== undefined) {
+                mat.envMapIntensity = envMapIntensity;
+                mat.needsUpdate = true;
               }
             });
           }
@@ -400,7 +364,21 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
     });
   }, [envMapIntensity]);
 
-  // (removida: não utilizada)
+  // Função helper para gerenciar background/environment no modo AR
+  const updateARBackgroundState = () => {
+    if (!sceneRef.current) return;
+    
+    // No modo AR com textura habilitada: mantém environment mas remove background
+    if (useARCamera && bgTextureEnabled && bgTextureRef.current) {
+      sceneRef.current.background = null; // Transparente para ver vídeo
+      sceneRef.current.environment = bgTextureRef.current; // Mantém iluminação
+      console.log('📱 Modo AR: Background off, Environment on (iluminação ativa)');
+    } else if (!useARCamera && bgTextureEnabled && bgTextureRef.current) {
+      // Modo normal com textura: ambos ativos
+      sceneRef.current.background = bgTextureRef.current;
+      sceneRef.current.environment = bgTextureRef.current;
+    }
+  };
 
   // Função para animar opacity de 0 até o valor configurado
   const playOpacityAnimation = (objectName: string) => {
@@ -436,9 +414,9 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
       const fileExt = objectName.toLowerCase().split('.').pop();
       const isPlyOrSplat = fileExt === 'ply' || fileExt === 'splat';
       
-      if (isPlyOrSplat && (objData.object instanceof THREE.Points || objData.object instanceof THREE.Mesh)) {
+      if (isPlyOrSplat) {
         // PLY/SPLAT: Aplica no uniform
-        const material = (objData.object as THREE.Points | THREE.Mesh).material as THREE.ShaderMaterial;
+        const material = objData.object.material;
         if (material && material.uniforms && material.uniforms.uOpacity) {
           material.uniforms.uOpacity.value = currentOpacity;
         }
@@ -612,22 +590,18 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
 
       // Interpola posição
       const camera = activeCameraRef.current;
-      if (camera) {
-        camera.position.x = lerp(startCam.position.x, endCam.position.x, segmentT);
-        camera.position.y = lerp(startCam.position.y, endCam.position.y, segmentT);
-        camera.position.z = lerp(startCam.position.z, endCam.position.z, segmentT);
-      }
+      camera.position.x = lerp(startCam.position.x, endCam.position.x, segmentT);
+      camera.position.y = lerp(startCam.position.y, endCam.position.y, segmentT);
+      camera.position.z = lerp(startCam.position.z, endCam.position.z, segmentT);
 
       // Interpola rotação
       const rotX = lerpRotation(startCam.rotation.x, endCam.rotation.x, segmentT);
       const rotY = lerpRotation(startCam.rotation.y, endCam.rotation.y, segmentT);
       const rotZ = lerpRotation(startCam.rotation.z, endCam.rotation.z, segmentT);
       
-      if (camera) {
-        camera.rotation.x = rotX * (Math.PI / 180);
-        camera.rotation.y = rotY * (Math.PI / 180);
-        camera.rotation.z = rotZ * (Math.PI / 180);
-      }
+      camera.rotation.x = rotX * (Math.PI / 180);
+      camera.rotation.y = rotY * (Math.PI / 180);
+      camera.rotation.z = rotZ * (Math.PI / 180);
 
       if (progress < 1) {
         animationFrameRef.current = requestAnimationFrame(animate);
@@ -928,12 +902,11 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
         duplicates.push(item.name);
         // Limpa o objeto duplicado
         try {
-          if ((item.object instanceof THREE.Mesh || item.object instanceof THREE.Points) && item.object.geometry) {
-            item.object.geometry.dispose();
-          }
-          if ((item.object instanceof THREE.Mesh || item.object instanceof THREE.Points) && item.object.material) {
+          if (item.object.geometry) item.object.geometry.dispose();
+          if (item.object.material) {
             if (Array.isArray(item.object.material)) {
-              item.object.material.forEach((mat: THREE.Material) => mat.dispose());
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              item.object.material.forEach((mat: any) => mat.dispose());
             } else {
               item.object.material.dispose();
             }
@@ -1038,8 +1011,9 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
         const { OrbitControls } = await import('three/examples/jsm/controls/OrbitControls.js');
         const { PLYLoader } = await import('three/examples/jsm/loaders/PLYLoader.js');
         const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
-        // EffectComposer e RenderPass já importados de 'three-stdlib'
-        // ShaderPass já importado de 'three-stdlib'
+        const { EffectComposer } = await import('three/examples/jsm/postprocessing/EffectComposer.js');
+        const { RenderPass } = await import('three/examples/jsm/postprocessing/RenderPass.js');
+        const { ShaderPass } = await import('three/examples/jsm/postprocessing/ShaderPass.js');
         const { VignetteShader } = await import('three/examples/jsm/shaders/VignetteShader.js');
 
         const scene = new THREE.Scene();
@@ -1128,70 +1102,19 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
         renderer.domElement.style.zIndex = '10'; // Acima do vídeo (z-index: 1)
         renderer.domElement.style.pointerEvents = 'auto'; // Permite interação com OrbitControls
 
-        const ambientLight = new THREE.AmbientLight(0xffffff, ambientIntensity);
-        ambientLightRef.current = ambientLight;
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.5); // Aumentado de 0.5 para 1.5
         scene.add(ambientLight);
 
-        const pointLight = new THREE.PointLight(0xffffff, pointIntensity);
+        const pointLight = new THREE.PointLight(0xffffff, 2); // Aumentado de 1 para 2
         pointLight.position.set(10, 10, 10);
-        pointLightRef.current = pointLight;
         scene.add(pointLight);
-
-        const directionalLight = new THREE.DirectionalLight(0xffffff, directionalIntensity);
+        
+        // Adiciona luz direcional para melhor iluminação
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
         directionalLight.position.set(5, 5, 5);
-        directionalLightRef.current = directionalLight;
         scene.add(directionalLight);
-
+        
         console.log('💡 Luzes adicionadas (Ambient, Point, Directional) | Total objetos na cena:', scene.children.length);
-
-
-  // (Removido: hooks useEffect devem estar apenas no topo do componente)
-        {/* Light Intensity Controls */}
-        <div className="mb-3 border-b border-white/20 pb-2">
-          <p className="font-semibold text-yellow-300 mb-2">💡 Luzes da Cena:</p>
-          <div className="mb-2">
-            <label className="text-[10px] text-gray-300 mb-1 block">
-              AmbientLight: {ambientIntensity.toFixed(2)}
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="5"
-              step="0.01"
-              value={ambientIntensity}
-              onChange={e => setAmbientIntensity(parseFloat(e.target.value))}
-              className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-            />
-          </div>
-          <div className="mb-2">
-            <label className="text-[10px] text-gray-300 mb-1 block">
-              PointLight: {pointIntensity.toFixed(2)}
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="5"
-              step="0.01"
-              value={pointIntensity}
-              onChange={e => setPointIntensity(parseFloat(e.target.value))}
-              className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-            />
-          </div>
-          <div>
-            <label className="text-[10px] text-gray-300 mb-1 block">
-              DirectionalLight: {directionalIntensity.toFixed(2)}
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="5"
-              step="0.01"
-              value={directionalIntensity}
-              onChange={e => setDirectionalIntensity(parseFloat(e.target.value))}
-              className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-            />
-          </div>
-        </div>
 
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
@@ -1243,27 +1166,25 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
                 model.name = fileName;
                 
                 // 🌍 Configura materiais para receber iluminação do environment
-                model.traverse((child: THREE.Object3D) => {
-                  const mesh = child as THREE.Mesh;
-                  if (mesh.isMesh && mesh.material) {
-                    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-                    materials.forEach((mat) => {
+                model.traverse((child: any) => {
+                  if (child.isMesh && child.material) {
+                    const materials = Array.isArray(child.material) ? child.material : [child.material];
+                    materials.forEach((mat: any) => {
                       // Converte para MeshPhysicalMaterial se necessário
-                      let physicalMat = mat as THREE.MeshPhysicalMaterial;
-                      if (!(mat as THREE.Material).type || (mat as THREE.Material).type !== 'MeshPhysicalMaterial') {
-                        const baseMat = mat as THREE.MeshStandardMaterial;
+                      let physicalMat = mat;
+                      if (!mat.isMeshPhysicalMaterial) {
                         physicalMat = new THREE.MeshPhysicalMaterial({
-                          color: baseMat.color,
-                          map: baseMat.map,
-                          transparent: baseMat.transparent,
-                          opacity: baseMat.opacity,
-                          side: baseMat.side,
-                          roughness: baseMat.roughness !== undefined ? baseMat.roughness : 0.5,
-                          metalness: baseMat.metalness !== undefined ? baseMat.metalness : 0.0,
+                          color: mat.color,
+                          map: mat.map,
+                          transparent: mat.transparent,
+                          opacity: mat.opacity,
+                          side: mat.side,
+                          roughness: mat.roughness !== undefined ? mat.roughness : 0.5,
+                          metalness: mat.metalness !== undefined ? mat.metalness : 0.0,
                           envMapIntensity: 1.0
                         });
-                        mesh.material = Array.isArray(mesh.material)
-                          ? (mesh.material as THREE.Material[]).map((m) => m === mat ? physicalMat : m)
+                        child.material = Array.isArray(child.material)
+                          ? child.material.map((m: any) => m === mat ? physicalMat : m)
                           : physicalMat;
                       }
                       // Propriedades PBR realistas
@@ -1458,7 +1379,8 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
             });
           }
 
-          // Seleciona câmera ativa (removido: variável não utilizada)
+          // Seleciona câmera ativa
+          const activeCamera = useARCamera ? cameraAR : camera;
 
           // Gerencia background/environment baseado no modo AR
           if (sceneRef.current && bgTextureRef.current) {
@@ -1616,19 +1538,18 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
             }
             
             // Limpa geometria
-            if ((object instanceof THREE.Mesh || object instanceof THREE.Points) && object.geometry) {
+            if (object.geometry) {
               object.geometry.dispose();
               console.log(`  ✅ Geometria de ${name} disposta`);
             }
             
             // Limpa material(is)
-            if ((object instanceof THREE.Mesh || object instanceof THREE.Points) && object.material) {
+            if (object.material) {
               if (Array.isArray(object.material)) {
-                object.material.forEach((mat: THREE.Material) => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                object.material.forEach((mat: any) => {
                   // Limpa texturas
-                  if ('map' in mat && mat.map && mat.map instanceof THREE.Texture) {
-                    mat.map.dispose();
-                  }
+                  if (mat.map) mat.map.dispose();
                   mat.dispose();
                 });
               } else {
@@ -1946,7 +1867,24 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
           </div>
         </div>
 
-
+        {/* Environment Map Intensity Control */}
+        <div className="mb-3 border-b border-white/20 pb-2">
+          <p className="font-semibold text-cyan-300 mb-2">💡 Environment Intensity:</p>
+          <div>
+            <label className="text-[10px] text-gray-300 mb-1 block">
+              envMapIntensity: {envMapIntensity.toFixed(2)}
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="3"
+              step="0.01"
+              value={envMapIntensity}
+              onChange={e => setEnvMapIntensity(parseFloat(e.target.value))}
+              className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
+            />
+          </div>
+        </div>
 
         {/* Background Texture Control */}
         {texturePath && (
