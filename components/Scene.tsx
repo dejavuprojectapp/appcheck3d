@@ -78,6 +78,11 @@ interface DebugInfo {
   }>;
 }
 
+// Tipo para material com shader compilado
+interface PBRMaterialWithShader extends THREE.MeshStandardMaterial {
+  __shader?: THREE.WebGLProgramParametersWithUniforms;
+}
+
 
 export default function Scene({ modelPaths, texturePath }: SceneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -146,6 +151,10 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
   const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
   const pointLightRef = useRef<THREE.PointLight | null>(null);
   const directionalLightRef = useRef<THREE.DirectionalLight | null>(null);
+
+  // 🎨 Referências para materiais PBR dos GLBs (MeshStandardMaterial com onBeforeCompile)
+  const glbPbrMaterialsRef = useRef<Map<string, PBRMaterialWithShader>>(new Map());
+  const shaderTimeRef = useRef(0);
 
   // --- HOOKS DEVEM FICAR AQUI, NO TOPO DO COMPONENTE ---
   useEffect(() => {
@@ -288,6 +297,94 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
     } else {
       console.error(`❌ Objeto não encontrado: ${objectName}`);
     }
+  };
+
+  // 🎨 Função para aplicar shader customizado ao GLB usando onBeforeCompile
+  const applyPBRShaderToGLB = (mesh: THREE.Mesh, objectName: string) => {
+    // Extrai propriedades do material original
+    let originalOpacity = 1.0;
+    
+    // Suporta múltiplos tipos de materiais
+    const originalMaterial = mesh.material;
+    if (originalMaterial && !Array.isArray(originalMaterial)) {
+      const mat = originalMaterial as THREE.Material & { opacity?: number };
+      
+      // Copia a opacidade original
+      if (mat.opacity !== undefined) {
+        originalOpacity = mat.opacity;
+      }
+      
+      // Log detalhado do material
+      const matWithMap = originalMaterial as THREE.Material & { map?: THREE.Texture };
+      console.log(`🎨 Material original: ${(mat as THREE.Material).type || 'Unknown'}`, {
+        hasMap: !!matWithMap.map,
+        opacity: originalOpacity,
+      });
+    }
+
+    // Converte para MeshStandardMaterial se necessário (mantém textura e propriedades)
+    let pbrMaterial = originalMaterial as THREE.MeshStandardMaterial;
+    if (!Array.isArray(originalMaterial) && originalMaterial?.type !== 'MeshStandardMaterial' && originalMaterial?.type !== 'MeshPhysicalMaterial') {
+      // Cria um novo MeshStandardMaterial com as propriedades copiadas
+      const baseMat = originalMaterial as THREE.Material & { map?: THREE.Texture; color?: THREE.Color; opacity?: number; transparent?: boolean; side?: THREE.Side };
+      pbrMaterial = new THREE.MeshStandardMaterial({
+        color: baseMat.color,
+        map: baseMat.map, // ✅ Copia a textura
+        transparent: baseMat.transparent ?? true,
+        opacity: baseMat.opacity ?? 1.0,
+        side: baseMat.side ?? THREE.FrontSide,
+      });
+    } else {
+      pbrMaterial = (originalMaterial as THREE.MeshStandardMaterial).clone();
+    }
+
+    // Uniforms customizados
+    const uniforms = {
+      uAlpha: { value: originalOpacity },
+      uBrightness: { value: 1.0 },
+      uTime: { value: 0 },
+    };
+
+    // ✅ Injeta os uniforms no shader padrão do Three.js
+    pbrMaterial.onBeforeCompile = (shader) => {
+      // Adiciona uniforms ao shader
+      Object.assign(shader.uniforms, uniforms);
+
+      // Adiciona as DECLARAÇÕES dos uniforms no início do fragment shader
+      shader.fragmentShader = shader.fragmentShader.replace(
+        'void main() {',
+        `
+         uniform float uAlpha;
+         uniform float uBrightness;
+         uniform float uTime;
+         
+         void main() {`
+      );
+
+      // Injeta a lógica de alpha procedural no fragment shader
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
+         
+         // Alpha procedural isolado - map/diffuse já foram processados acima
+         float proceduralAlpha = sin(uTime * 2.0) * 0.3 + 0.7; // Pulso 0.4-1.0
+         float customAlpha = uAlpha * proceduralAlpha;
+         gl_FragColor.a *= customAlpha;
+         
+         // Aplica brilho
+         gl_FragColor.rgb *= uBrightness;`
+      );
+
+      // Armazena o material para atualizações posteriores
+      const matKey = `${objectName}_${Math.random()}`;
+      (pbrMaterial as PBRMaterialWithShader).__shader = shader as THREE.WebGLProgramParametersWithUniforms;
+      glbPbrMaterialsRef.current.set(matKey, pbrMaterial as PBRMaterialWithShader);
+    };
+
+    // Aplica o material ao mesh
+    mesh.material = pbrMaterial;
+    const hasMap = (pbrMaterial as THREE.MeshStandardMaterial).map ? 'SIM' : 'NÃO';
+    console.log(`✅ Shader PBR aplicado ao mesh: ${objectName} (textura: ${hasMap})`);
   };
 
   // Função para atualizar o brilho de um GLB
@@ -1145,45 +1242,12 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
                 model.position.set(0, 0, 0); // Nasce na origem
                 model.name = fileName;
                 
-                // 🌍 Configura materiais para receber iluminação do environment
+                // � Aplica shader PBR customizado aos GLBs
                 model.traverse((child: THREE.Object3D) => {
                   const mesh = child as THREE.Mesh;
                   if (mesh.isMesh && mesh.material) {
-                    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-                    materials.forEach((mat) => {
-                      // Converte para MeshPhysicalMaterial se necessário
-                      let physicalMat = mat as THREE.MeshPhysicalMaterial;
-                      if (!(mat as THREE.Material).type || (mat as THREE.Material).type !== 'MeshPhysicalMaterial') {
-                        const baseMat = mat as THREE.MeshStandardMaterial;
-                        physicalMat = new THREE.MeshPhysicalMaterial({
-                          color: baseMat.color,
-                          map: baseMat.map,
-                          transparent: baseMat.transparent,
-                          opacity: baseMat.opacity,
-                          side: baseMat.side,
-                          roughness: baseMat.roughness !== undefined ? baseMat.roughness : 0.5,
-                          metalness: baseMat.metalness !== undefined ? baseMat.metalness : 0.0,
-                          envMapIntensity: 1.0
-                        });
-                        mesh.material = Array.isArray(mesh.material)
-                          ? (mesh.material as THREE.Material[]).map((m) => m === mat ? physicalMat : m)
-                          : physicalMat;
-                      }
-                      // Propriedades PBR realistas
-                      physicalMat.envMapIntensity = 1.0;
-                      physicalMat.roughness = physicalMat.roughness !== undefined ? physicalMat.roughness : 0.5;
-                      physicalMat.metalness = physicalMat.metalness !== undefined ? physicalMat.metalness : 0.0;
-                      physicalMat.clearcoat = 0.6;
-                      physicalMat.clearcoatRoughness = 0.2;
-                      physicalMat.reflectivity = 0.7;
-                      physicalMat.ior = 1.45;
-                      physicalMat.transmission = 0.1;
-                      physicalMat.thickness = 0.1;
-                      physicalMat.sheen = 0.5;
-                      physicalMat.sheenRoughness = 0.5;
-                      physicalMat.sheenColor = new THREE.Color(0xffffff);
-                      physicalMat.needsUpdate = true;
-                    });
+                    // Aplica o shader PBR ao mesh
+                    applyPBRShaderToGLB(mesh, fileName);
                   }
                 });
                 
@@ -1317,6 +1381,16 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
         
         const animate = () => {
           animationId = requestAnimationFrame(animate);
+          
+          // 🎨 Atualiza uniforms dos materiais PBR dos GLBs (MeshStandardMaterial)
+          shaderTimeRef.current += 0.016; // ~60fps
+          glbPbrMaterialsRef.current.forEach((material) => {
+            // Acessa o shader compilado armazenado no material
+            const shader = (material as PBRMaterialWithShader).__shader;
+            if (shader && shader.uniforms && shader.uniforms.uTime) {
+              shader.uniforms.uTime.value = shaderTimeRef.current;
+            }
+          });
           
           //  Fake 4DOF: Aplica movimento baseado em device orientation + motion
           if (useARCamera && isInitialOrientationSet.current) {
