@@ -131,8 +131,6 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
   const animationFrameRef = useRef<number | null>(null);
   const animationProgressRef = useRef(0);
   const animationDurationRef = useRef(5000); // Duração total da animação em ms
-  const [animatingObjects, setAnimatingObjects] = useState<Set<string>>(new Set());
-  const objectAnimationFramesRef = useRef<Map<string, number>>(new Map());
   const [vignetteOffset, setVignetteOffset] = useState(1.1);
   const [vignetteDarkness, setVignetteDarkness] = useState(1.3);
   const vignettePassRef = useRef<ShaderPass | null>(null);
@@ -148,7 +146,6 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
   const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
   const pointLightRef = useRef<THREE.PointLight | null>(null);
   const directionalLightRef = useRef<THREE.DirectionalLight | null>(null);
-  const [envMapIntensity, setEnvMapIntensity] = useState(1.0);
 
   // --- HOOKS DEVEM FICAR AQUI, NO TOPO DO COMPONENTE ---
   useEffect(() => {
@@ -210,25 +207,6 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
       bloomPassRef.current.threshold = bloomThreshold;
     }
   }, [bloomThreshold, useARCamera]);
-
-  useEffect(() => {
-    sceneObjectsRef.current.forEach(obj => {
-      if (obj.object && obj.object.traverse) {
-        obj.object.traverse((child: THREE.Object3D) => {
-          const mesh = child as THREE.Mesh;
-          if (mesh.isMesh && mesh.material) {
-            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-            materials.forEach((mat) => {
-              if ('envMapIntensity' in mat) {
-                (mat as THREE.MeshPhysicalMaterial).envMapIntensity = envMapIntensity;
-                (mat as THREE.Material).needsUpdate = true;
-              }
-            });
-          }
-        });
-      }
-    });
-  }, [envMapIntensity]);
 
   // Função para atualizar a posição de um objeto com smooth transition
   const updateObjectPosition = (objectName: string, axis: 'x' | 'y' | 'z', value: number) => {
@@ -426,92 +404,8 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
       }
     }
   };
-  // Atualiza envMapIntensity de todos os materiais GLB ao mudar o slider
-  useEffect(() => {
-    sceneObjectsRef.current.forEach(obj => {
-      if (obj.object && obj.object.traverse) {
-        obj.object.traverse((child: THREE.Object3D) => {
-          const mesh = child as THREE.Mesh;
-          if (mesh.isMesh && mesh.material) {
-            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-            materials.forEach((mat) => {
-              if ('envMapIntensity' in mat) {
-                (mat as THREE.MeshPhysicalMaterial).envMapIntensity = envMapIntensity;
-                (mat as THREE.Material).needsUpdate = true;
-              }
-            });
-          }
-        });
-      }
-    });
-  }, [envMapIntensity]);
 
   // (removida: não utilizada)
-
-  // Função para animar opacity de 0 até o valor configurado
-  const playOpacityAnimation = (objectName: string) => {
-    const objData = sceneObjectsRef.current.find(obj => obj.name === objectName);
-    if (!objData) {
-      console.error(`❌ Objeto não encontrado: ${objectName}`);
-      return;
-    }
-
-    // Cancela animação anterior deste objeto se existir
-    const existingAnimFrame = objectAnimationFramesRef.current.get(objectName);
-    if (existingAnimFrame) {
-      cancelAnimationFrame(existingAnimFrame);
-    }
-
-    // Marca objeto como animando
-    setAnimatingObjects(prev => new Set(prev).add(objectName));
-
-    const targetOpacity = objData.opacity; // Valor configurado no slider
-    const duration = 1500; // 1.5 segundos de animação
-    const startTime = Date.now();
-
-    console.log(`▶️ Iniciando animação de opacity: ${objectName} (0 → ${targetOpacity.toFixed(2)})`);
-
-    const animate = () => {
-      const elapsed = Date.now() - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      
-      // Interpolação linear de 0 até targetOpacity
-      const currentOpacity = progress * targetOpacity;
-
-      // Aplica opacity atual
-      const fileExt = objectName.toLowerCase().split('.').pop();
-      const isPlyOrSplat = fileExt === 'ply' || fileExt === 'splat';
-      
-      if (isPlyOrSplat && (objData.object instanceof THREE.Points || objData.object instanceof THREE.Mesh)) {
-        // PLY/SPLAT: Aplica no uniform
-        const material = (objData.object as THREE.Points | THREE.Mesh).material as THREE.ShaderMaterial;
-        if (material && material.uniforms && material.uniforms.uOpacity) {
-          material.uniforms.uOpacity.value = currentOpacity;
-        }
-      } else {
-        // GLB: Aplica no material padrão
-        applyObjectOpacity(objData.object, objectName, currentOpacity);
-      }
-
-      if (progress < 1) {
-        // Continua animação
-        const frameId = requestAnimationFrame(animate);
-        objectAnimationFramesRef.current.set(objectName, frameId);
-      } else {
-        // Animação completa
-        console.log(`✅ Animação completa: ${objectName}`);
-        objectAnimationFramesRef.current.delete(objectName);
-        setAnimatingObjects(prev => {
-          const newSet = new Set(prev);
-          newSet.delete(objectName);
-          return newSet;
-        });
-      }
-    };
-
-    animate();
-  };
-
   // Função para atualizar a rotação de um objeto
   const updateObjectRotation = (objectName: string, axis: 'x' | 'y' | 'z', degrees: number) => {
     const objData = sceneObjectsRef.current.find(obj => obj.name === objectName);
@@ -2218,18 +2112,6 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
                     <div key={`${obj.name}-${idx}`} className="mb-3 pl-2 border-l-2 border-green-500/50">
                       <div className="flex items-center gap-2 mb-2">
                         <p className="text-[10px] font-semibold text-green-200 flex-1">{obj.name}</p>
-                        <button
-                          onClick={() => playOpacityAnimation(obj.name)}
-                          disabled={animatingObjects.has(obj.name)}
-                          className={`px-2 py-1 rounded text-[9px] font-semibold ${
-                            animatingObjects.has(obj.name)
-                              ? 'bg-gray-500 cursor-not-allowed'
-                              : 'bg-blue-500 hover:bg-blue-600'
-                          }`}
-                          title="Animar Opacity (0 → valor configurado)"
-                        >
-                          {animatingObjects.has(obj.name) ? '⏸️' : '▶️'}
-                        </button>
                       </div>
                       
                       {/* Controles de Visibilidade e Opacity */}
@@ -2367,18 +2249,6 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
               <div key={`${obj.name}-${idx}`} className="mb-3 pl-2 border-l-2 border-blue-500/30">
                 <div className="flex items-center gap-2 mb-2">
                   <p className="text-[10px] font-semibold text-white/90 flex-1">{obj.name}</p>
-                  <button
-                    onClick={() => playOpacityAnimation(obj.name)}
-                    disabled={animatingObjects.has(obj.name)}
-                    className={`px-2 py-1 rounded text-[9px] font-semibold ${
-                      animatingObjects.has(obj.name)
-                        ? 'bg-gray-500 cursor-not-allowed'
-                        : 'bg-blue-500 hover:bg-blue-600'
-                    }`}
-                    title="Animar Opacity (0 → valor configurado)"
-                  >
-                    {animatingObjects.has(obj.name) ? '⏸️' : '▶️'}
-                  </button>
                 </div>
                 
                 {/* Controles de Visibilidade e Opacity */}
