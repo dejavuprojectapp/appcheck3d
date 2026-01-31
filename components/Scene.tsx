@@ -367,10 +367,10 @@ export default function Scene({ modelPaths, texturePath }: SceneProps) {
         `#include <dithering_fragment>
          
          // Alpha procedural isolado - map/diffuse já foram processados acima
-         float proceduralAlpha = sin(uTime * 2.0) * 0.3 + 0.7; // Pulso 0.4-1.0
-         float customAlpha = uAlpha * proceduralAlpha;
-         gl_FragColor.a *= customAlpha;
-         
+         // float proceduralAlpha = sin(uTime * 2.0) * 0.3 + 0.7; // Pulso 0.4-1.0
+         // float customAlpha = uAlpha * proceduralAlpha;
+         // gl_FragColor.a *= customAlpha;
+         gl_FragColor.a *= uAlpha; // Opacidade fixa
          // Aplica brilho
          gl_FragColor.rgb *= uBrightness;`
       );
